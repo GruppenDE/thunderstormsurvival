@@ -19,7 +19,7 @@
     doc, setDoc, getDoc, onSnapshot, updateDoc, deleteDoc
   } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js";
   import {
-    getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword,
+    getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut,
     setPersistence, browserLocalPersistence
   } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-auth.js";
 
@@ -47,7 +47,7 @@
   window.__resolveFirebaseReady({
     db, collection, addDoc, getDocs, query, orderBy, limit, serverTimestamp,
     doc, setDoc, getDoc, onSnapshot, updateDoc, deleteDoc,
-    auth, createUserWithEmailAndPassword, signInWithEmailAndPassword
+    auth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut
   });
 </script>
 <style>
@@ -546,6 +546,18 @@
     margin-top: 6px;
   }
   .user-badge.show{ display:inline-flex; }
+  .logout-btn{
+    display:inline-flex; align-items:center; justify-content:center;
+    width:16px; height:16px; margin-left:2px; padding:0;
+    border-radius:50%; border:1px solid rgba(248,113,113,0.4);
+    background: rgba(248,113,113,0.12); color:#fca5a5;
+    font-size:9px; line-height:1; cursor:pointer;
+    transition: background-color 0.15s ease, transform 0.15s ease;
+  }
+  .logout-btn:hover{ background: rgba(248,113,113,0.3); color:#fecaca; }
+  .logout-btn:active{ transform: scale(0.9); }
+  .logout-btn:disabled{ opacity:0.5; cursor:not-allowed; }
+  .logout-btn:focus-visible{ outline: 2px solid var(--blue-300); outline-offset: 2px; }
 
   /* ================= MODO 2 JUGADORES: MODAL DE SALA ================= */
   .room-modal-backdrop{
@@ -791,7 +803,10 @@
       </button>
     </h1>
     <p class="text-[10px] sm:text-xs text-slate-400 tracking-widest mt-1">MAKASIAR ADAM // GAME DEVELOPER</p>
-    <div id="user-badge" class="user-badge"></div>
+    <div id="user-badge" class="user-badge">
+      <span id="user-badge-text"></span>
+      <button id="logout-btn" class="logout-btn" type="button" aria-label="Cerrar sesión" title="Cerrar sesión">⏻</button>
+    </div>
   </header>
 
   <!-- Contenedor Principal del Juego -->
@@ -861,8 +876,8 @@
           <span class="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse storm-dot"></span>
           <span>STORM RAGING</span>
         </div>
-        <div class="hidden sm:block">A/D MOVE &nbsp; W/SPACE JUMP &nbsp; ↑/F DISPARO (Nivel 10+)</div>
-        <div class="sm:hidden">TOCA LOS BOTONES ▼</div>
+        <div id="controls-hint-desktop" class="hidden sm:block">A/D MOVE &nbsp; W/SPACE JUMP &nbsp; ↑/F DISPARO (Nivel 10+)</div>
+        <div id="controls-hint-mobile" class="sm:hidden">TOCA LOS BOTONES ▼</div>
       </div>
 
       <!-- Lienzo del Juego -->
@@ -894,7 +909,7 @@
               1 Jugador
             </button>
             <button id="mp-mode-btn" class="start-btn bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold tracking-wider px-6 py-2.5 rounded-lg uppercase w-full">
-              ⚡ 2 Jugadores (Online)
+              ⚡ 2 Jugadores
             </button>
           </div>
         </div>
@@ -915,6 +930,16 @@
     </div>
     <div class="w-full mt-2 md:hidden">
       <button id="btn-shoot" class="touch-btn locked w-full bg-red-900/60 border border-red-700/70 py-2.5 rounded-lg text-xs font-bold text-red-200">🔫 DISPARO (Nivel 10+)</button>
+    </div>
+
+    <!-- Controles del Jugador 2 (solo visibles en Modo Supervivencia en Equipo) -->
+    <div id="p2-controls" class="w-full mt-4" style="display:none;">
+      <p class="text-center text-[10px] font-mono text-amber-400/80 mb-1.5 tracking-wider">JUGADOR 2 &nbsp;(también: ←/→/↑)</p>
+      <div class="flex justify-between w-full gap-2">
+        <button id="p2-btn-left" class="touch-btn flex-1 bg-amber-900/40 border border-amber-700/60 py-3 rounded-lg text-xs font-bold text-amber-200">◀ IZQUIERDA</button>
+        <button id="p2-btn-jump" class="touch-btn flex-1 bg-amber-900/40 border border-amber-700/60 py-3 rounded-lg text-xs font-bold text-amber-200">▲ SALTO</button>
+        <button id="p2-btn-right" class="touch-btn flex-1 bg-amber-900/40 border border-amber-700/60 py-3 rounded-lg text-xs font-bold text-amber-200">DERECHA ▶</button>
+      </div>
     </div>
   </main>
 
@@ -996,6 +1021,8 @@
     const authSubmitBtn = document.getElementById('auth-submit-btn');
     const authSwitchBtn = document.getElementById('auth-switch-btn');
     const userBadge = document.getElementById('user-badge');
+    const userBadgeText = document.getElementById('user-badge-text');
+    const logoutBtn = document.getElementById('logout-btn');
 
     let currentUser = null;
 
@@ -1173,7 +1200,7 @@
           currentUser = { name, countryCode: code, countryName, flag: countryFlag(code) };
         }
 
-        userBadge.innerHTML = `${currentUser.flag} <span class="text-slate-200">${escapeHtml(currentUser.name)}</span> · ${escapeHtml(currentUser.countryName)}`;
+        userBadgeText.innerHTML = `${currentUser.flag} <span class="text-slate-200">${escapeHtml(currentUser.name)}</span> · ${escapeHtml(currentUser.countryName)}`;
         userBadge.classList.add('show');
 
         const overlayTitle = document.querySelector('#overlay h2');
@@ -1194,6 +1221,46 @@
       div.textContent = str;
       return div.innerHTML;
     }
+
+    // --- Cerrar sesión: sale de cualquier sala/partida multijugador activa,
+    // cierra la sesión de Firebase Authentication y vuelve a mostrar la
+    // pantalla de login para que se pueda entrar con otra cuenta. ---
+    logoutBtn.addEventListener('click', async () => {
+      logoutBtn.disabled = true;
+      try {
+        if (typeof teardownRoomFlow === 'function') teardownRoomFlow();
+        if (typeof leaveMultiplayer === 'function') leaveMultiplayer();
+        if (roomModal && !roomModal.classList.contains('hidden')) roomModal.classList.add('hidden');
+        teamMode = false;
+        if (typeof hideP2Controls === 'function') hideP2Controls();
+        if (typeof updateControlsHint === 'function') updateControlsHint();
+
+        const fb = await window.firebaseReady;
+        await fb.signOut(fb.auth);
+      } catch (err) {
+        console.error('Error cerrando sesión:', err);
+      }
+
+      currentUser = null;
+      userBadge.classList.remove('show');
+      userBadgeText.innerHTML = '';
+
+      gameState = 'START';
+      overlay.classList.remove('hidden-fade');
+      finalScoreWrap.style.display = '';
+      finalScoreWrap.classList.remove('show');
+      mpResultEl.style.display = 'none';
+      const overlayTitle = document.querySelector('#overlay h2');
+      if (overlayTitle) overlayTitle.textContent = 'THUNDERSTORM SURVIVAL';
+
+      authForm.reset();
+      authMode = 'login';
+      applyAuthMode();
+      authScreen.classList.remove('fade-out');
+      authUsername.focus();
+
+      logoutBtn.disabled = false;
+    });
 
     const canvas = document.getElementById('gameCanvas');
     const ctx = canvas.getContext('2d');
@@ -1778,6 +1845,32 @@
       shieldActive: false
     };
 
+    // --- MODO SUPERVIVENCIA EN EQUIPO: dos jugadores comparten esta misma
+    // pantalla/dispositivo y las mismas vidas y puntaje (ya son variables
+    // globales únicas). player2 es un segundo personaje independiente con
+    // su propio movimiento/salto, dibujado con un color distinto. ---
+    let teamMode = false;
+    let player2 = {
+      x: 0, y: 0,
+      radius: 10,
+      height: 38,
+      width: 16,
+      vx: 0, vy: 0,
+      speed: 6.5,
+      jumpForce: -8.7,
+      gravity: 0.58,
+      grounded: false,
+      facing: 1,
+      walkPhase: 0,
+      squash: 1,
+      corePulse: 0,
+      trail: [],
+      invincible: false,
+      invincibleUntil: 0,
+      shieldActive: false
+    };
+    let keys2 = { left: false, right: false };
+
     let obstacles = [];
     let particles = [];
     let lightningBolts = [];
@@ -1817,6 +1910,18 @@
       }
     }
 
+    function tryJump2() {
+      if (gameState === 'PLAYING' && teamMode && player2.grounded) {
+        player2.vy = player2.jumpForce;
+        player2.grounded = false;
+        player2.squash = 0.8;
+        sfxJump();
+        for (let i = 0; i < 4; i++) {
+          particles.push({ x: player2.x, y: player2.y, vx: (Math.random() - 0.5) * 1.5, vy: Math.random() * 0.5, life: 0.8, color: '#fcd34d' });
+        }
+      }
+    }
+
     // --- Disparo del jugador: solo funciona a partir del nivel de desbloqueo,
     // dispara una bala de energía hacia arriba para derribar OVNIS. ---
     function tryShoot() {
@@ -1837,12 +1942,29 @@
     }
 
     window.addEventListener('keydown', (e) => {
+      if (teamMode) {
+        // En modo equipo: Jugador 1 = A/D + W/Espacio. Jugador 2 = flechas.
+        if (e.code === 'KeyA') keys.left = true;
+        if (e.code === 'KeyD') keys.right = true;
+        if (e.code === 'Space' || e.code === 'KeyW') { e.preventDefault(); tryJump(); }
+        if (e.code === 'ArrowLeft') { e.preventDefault(); keys2.left = true; }
+        if (e.code === 'ArrowRight') { e.preventDefault(); keys2.right = true; }
+        if (e.code === 'ArrowUp') { e.preventDefault(); tryJump2(); }
+        return;
+      }
       if (e.code === 'ArrowLeft' || e.code === 'KeyA') keys.left = true;
       if (e.code === 'ArrowRight' || e.code === 'KeyD') keys.right = true;
       if (e.code === 'Space' || e.code === 'KeyW') { e.preventDefault(); tryJump(); }
       if (e.code === 'ArrowUp' || e.code === 'KeyF' || e.code === 'KeyJ' || e.code === 'ControlLeft') { e.preventDefault(); tryShoot(); }
     });
     window.addEventListener('keyup', (e) => {
+      if (teamMode) {
+        if (e.code === 'KeyA') keys.left = false;
+        if (e.code === 'KeyD') keys.right = false;
+        if (e.code === 'ArrowLeft') keys2.left = false;
+        if (e.code === 'ArrowRight') keys2.right = false;
+        return;
+      }
       if (e.code === 'ArrowLeft' || e.code === 'KeyA') keys.left = false;
       if (e.code === 'ArrowRight' || e.code === 'KeyD') keys.right = false;
     });
@@ -1858,6 +1980,26 @@
     bindHold(document.getElementById('btn-right'), () => keys.right = true, () => keys.right = false);
     bindHold(document.getElementById('btn-jump'), () => tryJump());
     bindHold(btnShoot, () => tryShoot());
+
+    const p2Controls = document.getElementById('p2-controls');
+    bindHold(document.getElementById('p2-btn-left'), () => keys2.left = true, () => keys2.left = false);
+    bindHold(document.getElementById('p2-btn-right'), () => keys2.right = true, () => keys2.right = false);
+    bindHold(document.getElementById('p2-btn-jump'), () => tryJump2());
+
+    function showP2Controls() { p2Controls.style.display = ''; }
+    function hideP2Controls() { p2Controls.style.display = 'none'; }
+
+    const controlsHintDesktop = document.getElementById('controls-hint-desktop');
+    const controlsHintMobile = document.getElementById('controls-hint-mobile');
+    function updateControlsHint() {
+      if (teamMode) {
+        controlsHintDesktop.textContent = 'P1: A/D MOVE · W/ESPACIO SALTO   —   P2: ←/→ MOVE · ↑ SALTO';
+        controlsHintMobile.textContent = 'EQUIPO: USA LOS BOTONES ▼';
+      } else {
+        controlsHintDesktop.textContent = 'A/D MOVE   W/SPACE JUMP   ↑/F DISPARO (Nivel 10+)';
+        controlsHintMobile.textContent = 'TOCA LOS BOTONES ▼';
+      }
+    }
 
     function pauseGame() {
       if (gameState !== 'PLAYING') return;
@@ -1984,6 +2126,8 @@
         startBtn.textContent = 'REINTENTAR';
         statusMsg.textContent = 'GAME OVER';
         finalScoreVal.textContent = score;
+        const finalScoreLabelEl = document.querySelector('.final-score-label');
+        if (finalScoreLabelEl) finalScoreLabelEl.textContent = teamMode ? 'PUNTAJE FINAL DEL EQUIPO' : 'PUNTAJE FINAL';
         finalScoreWrap.classList.add('show');
         saveScoreRecord(score, elapsedTime);
         if (multiplayer) mpReportFinished();
@@ -2079,11 +2223,19 @@
       ensureAudio();
       stopMusic();
       resizeCanvas();
-      player.x = cssW / 2;
+      player.x = teamMode ? cssW / 2 - 40 : cssW / 2;
       player.y = cssH - groundOffset();
       player.vx = 0; player.vy = 0;
       player.walkPhase = 0; player.squash = 1; player.landing = false; player.trail = [];
       player.invincible = false; player.invincibleUntil = 0; player.shieldActive = false;
+      if (teamMode) {
+        player2.x = cssW / 2 + 40;
+        player2.y = cssH - groundOffset();
+        player2.vx = 0; player2.vy = 0;
+        player2.walkPhase = 0; player2.squash = 1; player2.landing = false; player2.trail = [];
+        player2.invincible = false; player2.invincibleUntil = 0; player2.shieldActive = false;
+        keys2.left = false; keys2.right = false;
+      }
       obstacles = []; particles = []; lightningBolts = []; groundImpacts = [];
       ufos = []; heartPickups = [];
       bullets = []; lastShotAt = -99999; weaponUnlocked = false;
@@ -2105,6 +2257,9 @@
     }
     startBtn.addEventListener('click', () => {
       leaveMultiplayer();
+      teamMode = false;
+      hideP2Controls();
+      updateControlsHint();
       resetGame();
     });
 
@@ -2153,11 +2308,46 @@
     // Estado de la sala mientras se está formando (antes de empezar a jugar)
     let roomFlow = { code: null, role: null, unsub: null, countdownTimer: null };
     // Estado de la partida multijugador activa (durante PLAYING/GAMEOVER)
-    let multiplayer = null; // { code, role, opponentName, unsub, lastSync, resultShown }
+    let multiplayer = null; // { code, role, opponentName, unsub, lastSync, resultShown, mode }
+    // Modo de sala elegido en el selector antes de crear/unirse: 'versus' (1 vs 1)
+    // o 'duo' (2 vs 2). Determina cómo se etiqueta la sala y si este dispositivo
+    // juega con un solo jugador o con dos (Jugador 1 + Jugador 2 en equipo).
+    let pendingRoomMode = 'versus';
+    function roomModeLabel(mode) {
+      return mode === 'duo' ? '2 vs 2' : 'Versus (1 vs 1)';
+    }
 
     function openRoomModal() {
       roomModal.classList.remove('hidden');
-      renderRoomMenu();
+      renderModeChooser();
+    }
+
+    // --- Selección de modo al crear una partida de 2 jugadores ---
+    function renderModeChooser() {
+      roomModalBody.innerHTML = `
+        <p class="room-status-line">Elige el modo de juego:</p>
+        <button id="mode-versus-btn" class="room-btn">🆚 Modo Versus (1 vs 1)</button>
+        <p class="room-status-line" style="margin-top:-6px; opacity:0.75; font-size:9.5px;">Cada uno juega online desde su propio dispositivo. Gana quien saque más puntaje.</p>
+        <button id="mode-duo-btn" class="room-btn" style="margin-top:12px;">⚔️ Modo 2 vs 2</button>
+        <p class="room-status-line" style="margin-top:-6px; opacity:0.75; font-size:9.5px;">Dos equipos online (2 jugadores por dispositivo, comparten vidas y puntaje). Gana el equipo con mayor puntaje combinado.</p>
+        <button id="mode-team-btn" class="room-btn secondary" style="margin-top:12px;">🛡️ Supervivencia en Equipo</button>
+        <p class="room-status-line" style="margin-top:-6px; opacity:0.75; font-size:9.5px;">Dos jugadores, una sola pantalla: comparten vidas y puntaje. ¡Sobrevivan juntos!</p>
+      `;
+      document.getElementById('mode-versus-btn').addEventListener('click', () => { pendingRoomMode = 'versus'; renderRoomMenu(); });
+      document.getElementById('mode-duo-btn').addEventListener('click', () => { pendingRoomMode = 'duo'; renderRoomMenu(); });
+      document.getElementById('mode-team-btn').addEventListener('click', startTeamSurvival);
+    }
+
+    // Inicia el modo Supervivencia en Equipo: local, en el mismo dispositivo,
+    // sin salas ni Firestore de por medio (no es "versus" contra un rival).
+    function startTeamSurvival() {
+      teardownRoomFlow();
+      leaveMultiplayer();
+      roomModal.classList.add('hidden');
+      teamMode = true;
+      showP2Controls();
+      updateControlsHint();
+      resetGame();
     }
     function closeRoomModal() {
       roomModal.classList.add('hidden');
@@ -2198,13 +2388,18 @@
     }
 
     function renderRoomMenu() {
+      const introText = pendingRoomMode === 'duo'
+        ? 'Modo 2 vs 2: tu equipo (2 jugadores en este dispositivo) se enfrenta en tiempo real a otro equipo (2 jugadores en otro dispositivo).'
+        : 'Juega en tiempo real contra otra persona, cada uno desde su propio dispositivo.';
       roomModalBody.innerHTML = `
-        <p class="room-status-line">Juega en tiempo real contra otra persona, cada uno desde su propio dispositivo.</p>
+        <p class="room-status-line">${introText}</p>
         <button id="room-create-btn" class="room-btn">Crear Sala</button>
         <button id="room-join-btn" class="room-btn secondary">Unirse a una Sala</button>
+        <button id="room-mode-back-btn" class="room-btn secondary" style="margin-top:10px;">◀ Cambiar modo</button>
       `;
       document.getElementById('room-create-btn').addEventListener('click', renderCreateOptions);
       document.getElementById('room-join-btn').addEventListener('click', renderJoinForm);
+      document.getElementById('room-mode-back-btn').addEventListener('click', renderModeChooser);
     }
 
     function renderCreateOptions() {
@@ -2238,8 +2433,9 @@
     }
 
     function renderJoinForm() {
+      const rivalWord = pendingRoomMode === 'duo' ? 'el otro equipo' : 'tu rival';
       roomModalBody.innerHTML = `
-        <p class="room-status-line">Ingresa el código de 5 caracteres que te compartió tu rival.</p>
+        <p class="room-status-line">Ingresa el código de 5 caracteres que te compartió ${rivalWord}. Asegúrate de haber elegido el mismo modo (${escapeHtml(roomModeLabel(pendingRoomMode))}).</p>
         <input id="room-join-input" class="room-input" maxlength="5" placeholder="XXXXX" autocomplete="off">
         <div id="room-join-error" class="room-error"></div>
         <button id="room-join-confirm" class="room-btn">Unirse</button>
@@ -2268,29 +2464,36 @@
       document.getElementById('room-back-btn').addEventListener('click', () => { teardownRoomFlow(); renderJoinForm(); });
     }
 
-    function renderRoomWaiting(code, hasPassword) {
+    function renderRoomWaiting(code, hasPassword, mode) {
+      const rivalWord = mode === 'duo' ? 'con el equipo rival' : 'con tu rival';
+      const waitWord = mode === 'duo' ? 'Esperando al equipo rival…' : 'Esperando oponente…';
+      const deviceHint = mode === 'duo'
+        ? `${deviceLabel(DEVICE_TYPE)} — los 2 jugadores de tu equipo juegan en este dispositivo; el equipo rival debe unirse desde el mismo tipo de dispositivo`
+        : `${deviceLabel(DEVICE_TYPE)} — tu rival debe unirse desde el mismo tipo de dispositivo`;
       roomModalBody.innerHTML = `
-        <p class="room-status-line">Comparte este código con tu rival:</p>
+        <p class="room-status-line">Comparte este código ${rivalWord}:</p>
         <div class="room-code-display">${escapeHtml(code)}</div>
-        <p class="room-status-line">${deviceLabel(DEVICE_TYPE)} — tu rival debe unirse desde el mismo tipo de dispositivo</p>
+        <p class="room-status-line">${deviceHint}</p>
         ${hasPassword ? '<p class="room-status-line">🔒 Sala protegida con contraseña</p>' : ''}
         <div class="room-spinner"></div>
-        <p class="room-status-line" id="room-wait-msg">Esperando oponente…</p>
+        <p class="room-status-line" id="room-wait-msg">${waitWord}</p>
         <button id="room-cancel-btn" class="room-btn secondary">Cancelar</button>
       `;
       document.getElementById('room-cancel-btn').addEventListener('click', () => { teardownRoomFlow(); renderRoomMenu(); });
     }
 
-    function renderRoomReady(myName, opponentName) {
+    function renderRoomReady(myName, opponentName, mode) {
+      const foundLine = mode === 'duo' ? '¡Equipo rival encontrado!' : '¡Oponente encontrado!';
+      const startLine = mode === 'duo' ? 'El enfrentamiento por equipos empieza automáticamente para ambos.' : 'La partida empieza automáticamente para ambos.';
       roomModalBody.innerHTML = `
-        <p class="room-status-line">¡Oponente encontrado!</p>
+        <p class="room-status-line">${foundLine}</p>
         <div class="vs-row">
           <span class="vs-name">${escapeHtml(myName)}</span>
           <span class="vs-sep">VS</span>
           <span class="vs-name">${escapeHtml(opponentName)}</span>
         </div>
         <div class="room-countdown" id="room-countdown-val">…</div>
-        <p class="room-status-line">La partida empieza automáticamente para ambos.</p>
+        <p class="room-status-line">${startLine}</p>
       `;
     }
 
@@ -2307,8 +2510,10 @@
         if (!code) throw new Error('No se pudo generar un código de sala.');
 
         const hasPassword = !!password;
+        const mode = pendingRoomMode;
         await fb.setDoc(fb.doc(fb.db, 'rooms', code), {
           status: 'waiting',
+          mode,
           createdAt: fb.serverTimestamp(),
           hasPassword, password: hasPassword ? password : null,
           hostName: currentUser.name, hostCountry: currentUser.flag, hostDevice: DEVICE_TYPE,
@@ -2319,7 +2524,7 @@
         });
 
         roomFlow = { code, role: 'host', unsub: null, countdownTimer: null };
-        renderRoomWaiting(code, hasPassword);
+        renderRoomWaiting(code, hasPassword, mode);
         listenRoom(code, 'host');
       } catch (e) {
         console.error('Error creando sala:', e);
@@ -2340,6 +2545,10 @@
         if (!snap.exists()) { if (errEl) errEl.textContent = 'No existe una sala con ese código.'; return; }
         const data = snap.data();
         if (data.status !== 'waiting') { if (errEl) errEl.textContent = 'Esa sala ya no está disponible.'; return; }
+        if (data.mode && data.mode !== pendingRoomMode) {
+          if (errEl) errEl.textContent = `Esta sala es modo ${roomModeLabel(data.mode)}. Vuelve y elige ese mismo modo para unirte.`;
+          return;
+        }
         if (data.hostDevice && data.hostDevice !== DEVICE_TYPE) {
           if (errEl) errEl.textContent = `Esta sala fue creada desde ${deviceLabel(data.hostDevice)}. Debes unirte desde el mismo tipo de dispositivo (estás en ${deviceLabel(DEVICE_TYPE)}).`;
           return;
@@ -2366,6 +2575,10 @@
         if (!snap.exists()) { if (errEl) errEl.textContent = 'Esta sala ya no existe.'; return; }
         const data = snap.data();
         if (data.status !== 'waiting') { if (errEl) errEl.textContent = 'Esa sala ya no está disponible.'; return; }
+        if (data.mode && data.mode !== pendingRoomMode) {
+          if (errEl) errEl.textContent = `Esta sala es modo ${roomModeLabel(data.mode)}. Vuelve y elige ese mismo modo para unirte.`;
+          return;
+        }
         if (data.hostDevice && data.hostDevice !== DEVICE_TYPE) {
           if (errEl) errEl.textContent = `Esta sala fue creada desde ${deviceLabel(data.hostDevice)}. Debes unirte desde el mismo tipo de dispositivo.`;
           return;
@@ -2414,7 +2627,8 @@
       if (data.status === 'ready' && !multiplayer) {
         const myName = role === 'host' ? data.hostName : data.guestName;
         const opponentName = role === 'host' ? data.guestName : data.hostName;
-        renderRoomReady(myName, opponentName || '…');
+        const mode = data.mode === 'duo' ? 'duo' : 'versus';
+        renderRoomReady(myName, opponentName || '…', mode);
 
         if (!roomFlow.countdownTimer && data.startAt) {
           const tick = () => {
@@ -2422,7 +2636,7 @@
             const el = document.getElementById('room-countdown-val');
             if (remainingMs <= 0) {
               if (el) el.textContent = '¡YA!';
-              beginMultiplayerRound(code, role, opponentName || 'Rival');
+              beginMultiplayerRound(code, role, opponentName || 'Rival', mode);
               return;
             }
             if (el) el.textContent = Math.ceil(remainingMs / 1000);
@@ -2449,23 +2663,29 @@
 
         if (myFinished && oppFinished && !multiplayer.resultShown) {
           multiplayer.resultShown = true;
-          showMultiplayerResult(myFinalScore, oppFinalScore, multiplayer.opponentName);
+          showMultiplayerResult(myFinalScore, oppFinalScore, multiplayer.opponentName, multiplayer.mode);
         } else if (myFinished && !oppFinished) {
           statusMsg.textContent = 'ESPERANDO AL RIVAL…';
         }
       }
     }
 
-    function beginMultiplayerRound(code, role, opponentName) {
+    function beginMultiplayerRound(code, role, opponentName, mode) {
       if (roomFlow.countdownTimer) { clearTimeout(roomFlow.countdownTimer); roomFlow.countdownTimer = null; }
-      multiplayer = { code, role, opponentName, unsub: roomFlow.unsub, lastSync: 0, resultShown: false };
+      multiplayer = { code, role, opponentName, mode, unsub: roomFlow.unsub, lastSync: 0, resultShown: false };
       roomFlow = { code: null, role: null, unsub: null, countdownTimer: null }; // la sesión ahora vive en `multiplayer`
       window.firebaseReady.then(fb => {
         fb.updateDoc(fb.doc(fb.db, 'rooms', code), { status: 'playing' }).catch(() => {});
       });
+      // En modo 2 vs 2, este dispositivo lo juegan los 2 integrantes del equipo
+      // (comparten vidas y puntaje, igual que en Supervivencia en Equipo), y ese
+      // puntaje combinado es el que se compara contra el del equipo rival.
+      teamMode = mode === 'duo';
+      if (teamMode) { showP2Controls(); } else { hideP2Controls(); }
+      updateControlsHint();
       roomModal.classList.add('hidden');
       mpHud.classList.add('show');
-      mpOpponentName.textContent = opponentName;
+      mpOpponentName.textContent = mode === 'duo' ? `👥 ${opponentName}` : opponentName;
       mpOpponentScore.textContent = '0';
       mpOpponentLives.textContent = START_LIVES;
       mpOpponentStatus.textContent = '';
@@ -2498,20 +2718,24 @@
       statusMsg.textContent = 'ESPERANDO AL RIVAL…';
     }
 
-    function showMultiplayerResult(myScore, oppScore, opponentName) {
+    function showMultiplayerResult(myScore, oppScore, opponentName, mode) {
+      const isDuo = mode === 'duo';
       let verdict, color;
-      if (myScore > oppScore) { verdict = '🏆 ¡GANASTE!'; color = '#34d399'; }
-      else if (myScore < oppScore) { verdict = '💀 PERDISTE'; color = '#f87171'; }
+      if (myScore > oppScore) { verdict = isDuo ? '🏆 ¡TU EQUIPO GANÓ!' : '🏆 ¡GANASTE!'; color = '#34d399'; }
+      else if (myScore < oppScore) { verdict = isDuo ? '💀 TU EQUIPO PERDIÓ' : '💀 PERDISTE'; color = '#f87171'; }
       else { verdict = '🤝 EMPATE'; color = '#fbbf24'; }
+
+      const myLabel = isDuo ? 'TU EQUIPO' : 'TÚ';
+      const oppLabel = isDuo ? `EQUIPO ${escapeHtml(opponentName).toUpperCase()}` : escapeHtml(opponentName);
 
       finalScoreWrap.style.display = 'none';
       mpResultEl.style.display = 'block';
       mpResultEl.innerHTML = `
         <span class="final-score-label" style="color:${color};">${verdict}</span>
         <div class="vs-row" style="margin-top:6px;">
-          <span class="vs-name">TÚ: <b>${myScore}</b></span>
+          <span class="vs-name">${myLabel}: <b>${myScore}</b></span>
           <span class="vs-sep">·</span>
-          <span class="vs-name">${escapeHtml(opponentName)}: <b>${oppScore}</b></span>
+          <span class="vs-name">${oppLabel}: <b>${oppScore}</b></span>
         </div>
       `;
       statusMsg.textContent = 'GAME OVER';
@@ -2615,15 +2839,23 @@
     }
 
     function ufoFire(u) {
-      const playerMoving = keys.left || keys.right;
+      // --- En Modo Equipo, el OVNI dispara al jugador más cercano de los dos ---
+      let target = player;
+      if (teamMode) {
+        const d1 = Math.abs(player.x - u.x);
+        const d2 = Math.abs(player2.x - u.x);
+        target = d2 < d1 ? player2 : player;
+      }
+
+      const playerMoving = target === player ? (keys.left || keys.right) : (keys2.left || keys2.right);
       const missed = playerMoving && Math.random() < 0.10;
-      let aimX = player.x;
-      const aimY = player.y - player.height / 2;
+      let aimX = target.x;
+      const aimY = target.y - target.height / 2;
       if (missed) {
         // --- Fallo: el rayo cae desviado del jugador, a un lado ---
         const dodgeDir = Math.random() < 0.5 ? -1 : 1;
         const dodgeDist = 55 + Math.random() * 45;
-        aimX = Math.min(cssW - 30, Math.max(30, player.x + dodgeDir * dodgeDist));
+        aimX = Math.min(cssW - 30, Math.max(30, target.x + dodgeDir * dodgeDist));
       }
       u.beamPts = createLightning(u.x, u.y + 7, aimX, aimY, 9, 20);
       u.beamAlpha = 1;
@@ -2635,8 +2867,11 @@
       if (missed) {
         vibrateDevice([25]);
       } else {
-        vibrateDevice(player.invincible ? [30] : [60, 40, 60]);
-        if (!player.invincible) loseLife();
+        vibrateDevice(target.invincible ? [30] : [60, 40, 60]);
+        if (!target.invincible) {
+          if (target === player2) { player2.invincible = true; player2.invincibleUntil = clock + 1600; }
+          loseLife();
+        }
       }
     }
 
@@ -3007,6 +3242,66 @@
         if (player.trail[i].life <= 0) player.trail.splice(i, 1);
       }
 
+      // --- Jugador 2 (Modo Supervivencia en Equipo): misma física que el
+      // Jugador 1, pero controlado con `keys2` y sin arma ni disparo. ---
+      if (teamMode) {
+        if (player2.invincible && clock > player2.invincibleUntil) { player2.invincible = false; player2.shieldActive = false; }
+
+        const moving2 = keys2.left || keys2.right;
+        if (keys2.left) { player2.vx = -player2.speed; player2.facing = -1; }
+        else if (keys2.right) { player2.vx = player2.speed; player2.facing = 1; }
+        else player2.vx = 0;
+
+        player2.x += player2.vx;
+        player2.vy += player2.gravity;
+        player2.y += player2.vy;
+
+        if (player2.x < player2.width / 2) player2.x = player2.width / 2;
+        if (player2.x > cssW - player2.width / 2) player2.x = cssW - player2.width / 2;
+
+        const wasGrounded2 = player2.grounded;
+        if (player2.y > groundLevel) {
+          player2.y = groundLevel;
+          if (!wasGrounded2 && player2.vy > 4) {
+            player2.squash = 0.62;
+            player2.landing = true;
+            player2.landStart = clock;
+            for (let i = 0; i < 6; i++) {
+              particles.push({ x: player2.x, y: groundLevel, vx: (Math.random() - 0.5) * 2.4, vy: -Math.random() * 2.2, life: 1, color: '#fde68a' });
+            }
+          }
+          player2.vy = 0;
+          player2.grounded = true;
+        } else {
+          player2.grounded = false;
+        }
+
+        if (player2.landing) {
+          const t2 = Ease.clamp01((clock - player2.landStart) / 420);
+          player2.squash = 0.62 + (1 - 0.62) * Ease.outElastic(t2);
+          if (t2 >= 1) player2.landing = false;
+        } else {
+          let target2;
+          if (!player2.grounded) target2 = player2.vy < -1 ? 1.18 : 0.9;
+          else if (moving2) target2 = 1 + Math.sin(player2.walkPhase * 2) * 0.035;
+          else target2 = 1 + Math.sin(clock * 0.0025) * 0.018;
+          player2.squash += (target2 - player2.squash) * 0.16;
+        }
+
+        if (player2.grounded && moving2) {
+          player2.walkPhase += Math.abs(player2.vx) * 0.22;
+        }
+        player2.corePulse += dt * 0.006;
+
+        if (moving2 && player2.grounded && !reduceMotion) {
+          player2.trail.push({ x: player2.x, y: player2.y, life: 1 });
+        }
+        for (let i = player2.trail.length - 1; i >= 0; i--) {
+          player2.trail[i].life -= 0.06;
+          if (player2.trail[i].life <= 0) player2.trail.splice(i, 1);
+        }
+      }
+
       spawnObstacle();
       for (let i = obstacles.length - 1; i >= 0; i--) {
         let obs = obstacles[i];
@@ -3028,9 +3323,19 @@
         const dx = player.x - obs.x;
         const dy = (player.y - player.height / 2) - obs.y;
         const distance = Math.sqrt(dx * dx + dy * dy);
+        const hitP1 = distance < player.radius + obs.radius - 3 && !player.invincible;
 
-        if (distance < player.radius + obs.radius - 3 && !player.invincible) {
+        let hitP2 = false;
+        if (teamMode) {
+          const dx2 = player2.x - obs.x;
+          const dy2 = (player2.y - player2.height / 2) - obs.y;
+          const distance2 = Math.sqrt(dx2 * dx2 + dy2 * dy2);
+          hitP2 = distance2 < player2.radius + obs.radius - 3 && !player2.invincible;
+        }
+
+        if (hitP1 || hitP2) {
           obstacles.splice(i, 1);
+          if (hitP2) { player2.invincible = true; player2.invincibleUntil = clock + 1600; }
           loseLife();
           continue;
         }
@@ -3048,7 +3353,14 @@
         const dy = (player.y - player.height / 2) - h.y;
         const distance = Math.sqrt(dx * dx + dy * dy);
 
-        if (distance < player.radius + h.radius) {
+        let collected = distance < player.radius + h.radius;
+        if (!collected && teamMode) {
+          const dx2 = player2.x - h.x;
+          const dy2 = (player2.y - player2.height / 2) - h.y;
+          collected = Math.sqrt(dx2 * dx2 + dy2 * dy2) < player2.radius + h.radius;
+        }
+
+        if (collected) {
           heartPickups.splice(i, 1);
           lives += 1;
           renderLives('lives-pulse-gain');
@@ -3677,6 +3989,211 @@
       ctx.restore();
     }
 
+    function drawPlayer2(time) {
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      player2.trail.forEach(t => {
+        ctx.globalAlpha = t.life * 0.35;
+        ctx.fillStyle = '#f59e0b';
+        ctx.beginPath();
+        ctx.arc(t.x, t.y - player2.height / 2, 5, 0, Math.PI * 2);
+        ctx.fill();
+      });
+      ctx.restore();
+
+      const px = player2.x, py = player2.y;
+      const squash = player2.squash;
+      const airborne = !player2.grounded;
+      const isShooting = false; // el Jugador 2 no dispara en Modo Equipo
+
+      ctx.save();
+      ctx.translate(px, py);
+      ctx.scale(player2.facing, 1);
+      ctx.scale(1 / squash, squash);
+      if (player2.invincible) {
+        ctx.globalAlpha = 0.35 + 0.65 * Math.abs(Math.sin(clock * 0.02));
+      }
+
+      ctx.strokeStyle = '#fde68a';
+      ctx.fillStyle = '#fde68a';
+      ctx.lineWidth = 2.4;
+      ctx.lineCap = 'round';
+
+      const isMoving = (keys2.left || keys2.right) && player2.grounded;
+      const legSwing = airborne ? 0.5 : (isMoving ? Math.sin(player2.walkPhase) * 0.95 : 0);
+      const legSwing2 = airborne ? -0.4 : (isMoving ? Math.sin(player2.walkPhase + Math.PI) * 0.95 : 0);
+      const armSwing = airborne ? -0.6 : (isMoving ? Math.sin(player2.walkPhase + Math.PI) * 0.95 : Math.sin(clock * 0.0025) * 0.08);
+      const armSwing2 = airborne ? 0.9 : (isMoving ? Math.sin(player2.walkPhase) * 0.95 : Math.sin(clock * 0.0025 + Math.PI) * 0.08);
+
+      const hipY = -12;
+      const shoulderY = -22;
+      const headY = -30;
+      const strideLift = isMoving ? 1 : 0;
+
+      // --- Anticipación de aterrizaje: mientras cae, calcula qué tan cerca
+      // está del suelo para empezar a extender las piernas ANTES de tocarlo,
+      // en vez de mantenerlas dobladas hasta el instante del impacto. ---
+      const groundLevel = cssH - groundOffset();
+      const distToGround = groundLevel - py;
+      const landPrep = (airborne && player2.vy > 0)
+        ? Ease.clamp01(1 - distToGround / 55)
+        : 0;
+
+      // Piernas (dos segmentos con articulación, con levantamiento de rodilla al correr).
+      // En el aire, el personaje dobla ambas piernas hacia arriba (rodillas al pecho),
+      // como una pose de salto compacta, en vez de mantenerlas semi-extendidas.
+      if (airborne) {
+        [-1, 1].forEach((side) => {
+          // Pose doblada (en el aire, lejos del suelo)
+          const tuckKneeX = side * 5, tuckKneeY = hipY - 4;
+          const tuckFootX = side * 2.5, tuckFootY = hipY + 2;
+          // Pose extendida (a punto de aterrizar, piernas listas para el impacto)
+          const landKneeX = side * 4, landKneeY = hipY + 5;
+          const landFootX = side * 3, landFootY = hipY + 13;
+          const kneeX = tuckKneeX + (landKneeX - tuckKneeX) * landPrep;
+          const kneeY = tuckKneeY + (landKneeY - tuckKneeY) * landPrep;
+          const footX = tuckFootX + (landFootX - tuckFootX) * landPrep;
+          const footY = tuckFootY + (landFootY - tuckFootY) * landPrep;
+          ctx.beginPath();
+          ctx.moveTo(0, hipY);
+          ctx.lineTo(kneeX, kneeY);
+          ctx.lineTo(footX, footY);
+          ctx.stroke();
+        });
+      } else {
+        [legSwing, legSwing2].forEach((ang) => {
+          const kneeLift = strideLift * Math.max(0, Math.sin(ang)) * 4;
+          const kneeX = Math.sin(ang) * 8;
+          const kneeY = hipY + 7 - kneeLift;
+          const footX = kneeX + Math.sin(ang * 0.6) * 6;
+          const footY = hipY + 14 - kneeLift * 0.3;
+          ctx.beginPath();
+          ctx.moveTo(0, hipY);
+          ctx.lineTo(kneeX, kneeY);
+          ctx.lineTo(footX, footY);
+          ctx.stroke();
+        });
+      }
+
+      // Cuerpo (torso ligeramente cónico)
+      ctx.beginPath();
+      ctx.moveTo(0, hipY);
+      ctx.lineTo(0, shoulderY);
+      ctx.stroke();
+
+      // Brazos (con codo doblado, balanceo amplio hacia adelante y atrás al correr).
+      // Al disparar, el brazo delantero se levanta recto hacia arriba (apuntando),
+      // mientras el otro brazo baja hacia atrás para dar equilibrio a la pose.
+      if (isShooting) {
+        const raiseT = Ease.clamp01(1 - (clock - lastShotAt) / SHOT_POSE_DURATION);
+        const shootElbowX = 3 * raiseT, shootElbowY = shoulderY - 7 * raiseT;
+        const shootHandX = 4 * raiseT, shootHandY = shoulderY - 17 * raiseT;
+        ctx.beginPath();
+        ctx.moveTo(0, shoulderY + 1);
+        ctx.lineTo(shootElbowX, shootElbowY);
+        ctx.lineTo(shootHandX, shootHandY);
+        ctx.stroke();
+
+        const backElbowX = -7 * raiseT, backElbowY = shoulderY + 4 + 2 * raiseT;
+        const backHandX = -9 * raiseT, backHandY = shoulderY + 9 + 3 * raiseT;
+        ctx.beginPath();
+        ctx.moveTo(0, shoulderY + 1);
+        ctx.lineTo(backElbowX, backElbowY);
+        ctx.lineTo(backHandX, backHandY);
+        ctx.stroke();
+      } else {
+        [armSwing, armSwing2].forEach((ang) => {
+          const elbowX = Math.sin(ang) * 9;
+          const elbowY = shoulderY + 6 - Math.max(0, Math.cos(ang)) * 2;
+          const handX = elbowX + Math.sin(ang * 1.15 - 0.5) * 7;
+          const handY = shoulderY + 11 - Math.max(0, -Math.sin(ang)) * 3;
+          ctx.beginPath();
+          ctx.moveTo(0, shoulderY + 1);
+          ctx.lineTo(elbowX, elbowY);
+          ctx.lineTo(handX, handY);
+          ctx.stroke();
+        });
+      }
+
+      // Núcleo de energía en el pecho
+      const coreGlow = 0.6 + Math.sin(player2.corePulse * 8) * 0.25;
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      const coreGrad = ctx.createRadialGradient(0, shoulderY + 8, 0, 0, shoulderY + 8, 7);
+      coreGrad.addColorStop(0, `rgba(253,230,138,${coreGlow})`);
+      coreGrad.addColorStop(1, 'rgba(59,130,246,0)');
+      ctx.fillStyle = coreGrad;
+      ctx.beginPath();
+      ctx.arc(0, shoulderY + 8, 7, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      ctx.fillStyle = '#fef3c7';
+      ctx.beginPath();
+      ctx.arc(0, shoulderY + 8, 2, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Cabeza con visor. Al disparar, se inclina hacia atrás para mirar hacia
+      // arriba, siguiendo la trayectoria del disparo.
+      ctx.save();
+      ctx.translate(0, headY);
+      if (isShooting) {
+        const tiltT = Ease.clamp01(1 - (clock - lastShotAt) / SHOT_POSE_DURATION);
+        ctx.rotate(-1.4 * tiltT);
+      }
+      ctx.beginPath();
+      ctx.arc(0, 0, 6.5, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.save();
+      ctx.strokeStyle = '#f59e0b';
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.arc(1, 0, 3.2, -0.6, 1.2);
+      ctx.stroke();
+      ctx.restore();
+      ctx.restore();
+
+      // Capa / bufanda dinámica según velocidad y viento
+      const capeSway = Math.sin(time * 0.006) * 4 + player2.vx * -1.4;
+      ctx.strokeStyle = 'rgba(245,158,11,0.85)';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(-1, shoulderY + 2);
+      ctx.quadraticCurveTo(-8 + capeSway * 0.4, shoulderY + 10, -6 + capeSway, hipY + 6);
+      ctx.stroke();
+
+      // --- Escudo de inmunidad (súper poder al subir de nivel): anillo de energía pulsante ---
+      if (player2.shieldActive) {
+        const shieldCenterY = (headY + hipY) / 2 + 2;
+        const shieldR = 22 + Math.sin(clock * 0.012) * 2;
+        const pulse = 0.55 + 0.45 * Math.abs(Math.sin(clock * 0.01));
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        const shieldGrad = ctx.createRadialGradient(0, shieldCenterY, shieldR * 0.6, 0, shieldCenterY, shieldR);
+        shieldGrad.addColorStop(0, 'rgba(103,232,249,0)');
+        shieldGrad.addColorStop(0.75, `rgba(34,211,238,${0.18 * pulse})`);
+        shieldGrad.addColorStop(1, 'rgba(34,211,238,0)');
+        ctx.fillStyle = shieldGrad;
+        ctx.beginPath();
+        ctx.arc(0, shieldCenterY, shieldR, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.strokeStyle = `rgba(103,232,249,${0.75 * pulse})`;
+        ctx.lineWidth = 1.8;
+        ctx.beginPath();
+        ctx.arc(0, shieldCenterY, shieldR, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.strokeStyle = `rgba(224,242,254,${0.9 * pulse})`;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(0, shieldCenterY, shieldR - 3, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      ctx.restore();
+    }
+
+
     // Relámpago lejano de ambiente: un resplandor suave y silencioso en el fondo
     // que aparece de forma irregular, dando profundidad a la tormenta sin distraer.
     function updateAmbientFlash(dt) {
@@ -3736,6 +4253,7 @@
       drawRain();
       drawParticles();
       if (player.grounded !== undefined) drawPlayer(time);
+      if (teamMode) drawPlayer2(time);
 
       ctx.restore();
 
