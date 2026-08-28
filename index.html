@@ -965,7 +965,14 @@
          este dispositivo solo envía sus movimientos e informa el marcador. -->
     <div id="team-guest-panel" class="team-guest-card w-full rounded-xl p-4 relative" style="display:none;">
       <h2 class="text-sm font-bold text-amber-400 font-mono tracking-wider text-center mb-1">🎮 JUGADOR 2 REMOTO</h2>
-      <p class="text-[11px] text-slate-300 text-center mb-4">Estás jugando en la pantalla de <b id="team-guest-host-name">tu compañero</b>. Muévete con los botones o con ←/→/↑.</p>
+      <p class="text-[11px] text-slate-300 text-center mb-3">Estás jugando en la pantalla de <b id="team-guest-host-name">tu compañero</b>. Muévete con los botones o con ←/→/↑.</p>
+
+      <!-- Vista en vivo (simplificada) de la partida del anfitrión, reconstruida
+           a partir de los "frames" de posición que transmite por Firestore. -->
+      <div class="canvas-frame relative w-full rounded-lg overflow-hidden grid-bg border border-amber-500/20 bg-slate-950/50 mb-3">
+        <canvas id="teamGuestCanvas" class="absolute inset-0 w-full h-full"></canvas>
+        <div id="team-guest-live-badge" class="absolute top-1.5 right-2 text-[9px] font-mono tracking-wider text-amber-300/80 bg-slate-950/60 border border-amber-500/30 rounded px-1.5 py-0.5">● EN VIVO</div>
+      </div>
 
       <div class="flex justify-center items-center gap-4 mb-4 hud-chip border border-amber-500/30 rounded-lg px-3 py-2 font-mono text-xs">
         <span>⭐ <span id="team-guest-score">0</span></span>
@@ -2340,6 +2347,132 @@
     const teamGuestBtnRight = document.getElementById('team-guest-btn-right');
     const teamGuestLeaveBtn = document.getElementById('team-guest-leave-btn');
 
+    // =====================================================================
+    // --- VISTA EN VIVO DEL INVITADO (Supervivencia en Equipo online) ---
+    // El host transmite por Firestore un "frame" ligero (posiciones de los
+    // jugadores, obstáculos y OVNIs, redondeadas a enteros) varias veces por
+    // segundo. El invitado NO simula el juego: solo redibuja en su propio
+    // canvas la última foto recibida, escalada a su propio tamaño de
+    // pantalla. Es una reconstrucción simplificada (no un video real), pero
+    // le permite ver la partida en tiempo real en vez de solo un marcador. ---
+    // =====================================================================
+    const teamGuestCanvas = document.getElementById('teamGuestCanvas');
+    const teamGuestCtx = teamGuestCanvas.getContext('2d');
+    let tgCssW = 0, tgCssH = 0;
+    let teamGuestLatestFrame = null;
+    let teamGuestLoopRunning = false;
+
+    function resizeTeamGuestCanvas() {
+      const rect = teamGuestCanvas.parentElement.getBoundingClientRect();
+      const DPR = Math.min(window.devicePixelRatio || 1, 2);
+      tgCssW = rect.width; tgCssH = rect.height;
+      teamGuestCanvas.width = Math.round(tgCssW * DPR);
+      teamGuestCanvas.height = Math.round(tgCssH * DPR);
+      teamGuestCanvas.style.width = tgCssW + 'px';
+      teamGuestCanvas.style.height = tgCssH + 'px';
+      teamGuestCtx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    }
+    window.addEventListener('resize', () => { if (teamGuestPanel.style.display !== 'none') resizeTeamGuestCanvas(); });
+
+    // Dibuja la última foto recibida del host, escalando sus coordenadas
+    // (pensadas para el tamaño de SU canvas) al tamaño del canvas local.
+    function drawTeamGuestFrame() {
+      const ctx = teamGuestCtx;
+      ctx.clearRect(0, 0, tgCssW, tgCssH);
+      const f = teamGuestLatestFrame;
+      if (!f || !f.w || !f.h) {
+        ctx.fillStyle = 'rgba(148,163,184,0.6)';
+        ctx.font = '11px ui-monospace, monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('Esperando la señal de la partida…', tgCssW / 2, tgCssH / 2);
+        return;
+      }
+      const sx = tgCssW / f.w, sy = tgCssH / f.h;
+
+      // Fondo nocturno simplificado
+      const sky = ctx.createLinearGradient(0, 0, 0, tgCssH);
+      sky.addColorStop(0, '#0b1a3a');
+      sky.addColorStop(1, '#030712');
+      ctx.fillStyle = sky;
+      ctx.fillRect(0, 0, tgCssW, tgCssH);
+
+      // Suelo
+      const groundY = (f.h - f.gy) * sy;
+      ctx.fillStyle = '#0b0f19';
+      ctx.fillRect(0, groundY, tgCssW, tgCssH - groundY);
+      ctx.strokeStyle = 'rgba(96,165,250,0.35)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(0, groundY); ctx.lineTo(tgCssW, groundY); ctx.stroke();
+
+      // Obstáculos (orbes eléctricos que caen)
+      if (f.obs) {
+        f.obs.forEach(o => {
+          const ox = o[0] * sx, oy = o[1] * sy, r = Math.max(2.5, o[2] * ((sx + sy) / 2));
+          const glow = ctx.createRadialGradient(ox, oy, 0, ox, oy, r * 2.2);
+          glow.addColorStop(0, 'rgba(147,197,253,0.9)');
+          glow.addColorStop(1, 'rgba(147,197,253,0)');
+          ctx.fillStyle = glow;
+          ctx.beginPath(); ctx.arc(ox, oy, r * 2.2, 0, Math.PI * 2); ctx.fill();
+          ctx.fillStyle = '#dbeafe';
+          ctx.beginPath(); ctx.arc(ox, oy, r, 0, Math.PI * 2); ctx.fill();
+        });
+      }
+
+      // OVNIs
+      if (f.ufos) {
+        f.ufos.forEach(u => {
+          const ux = u[0] * sx, uy = u[1] * sy;
+          ctx.fillStyle = '#111827';
+          ctx.strokeStyle = '#93c5fd';
+          ctx.lineWidth = 1.5;
+          ctx.beginPath(); ctx.ellipse(ux, uy, 15 * sx, 5 * sy, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+        });
+      }
+
+      // Jugador 1 (host)
+      if (f.p1) drawTeamGuestFigure(ctx, f.p1[0] * sx, f.p1[1] * sy, '#60a5fa', (sx + sy) / 2);
+      // Jugador 2 (yo, remoto)
+      if (f.p2) drawTeamGuestFigure(ctx, f.p2[0] * sx, f.p2[1] * sy, '#fbbf24', (sx + sy) / 2);
+    }
+
+    function drawTeamGuestFigure(ctx, x, y, color, scale) {
+      const h = 34 * scale, w = 13 * scale;
+      ctx.save();
+      ctx.fillStyle = color;
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 8 * scale;
+      const r = w / 2;
+      ctx.beginPath();
+      ctx.moveTo(x - r, y);
+      ctx.arcTo(x - r, y - h, x, y - h, r);
+      ctx.arcTo(x + r, y - h, x + r, y, r);
+      ctx.lineTo(x + r, y);
+      ctx.arcTo(x + r, y + r * 0.4, x, y + r * 0.4, r);
+      ctx.arcTo(x - r, y + r * 0.4, x - r, y, r);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // Bucle de dibujo local del invitado: redibuja a ~30fps usando el último
+    // frame recibido (no espera a cada snapshot para sentirse fluido).
+    function teamGuestDrawLoop() {
+      if (!teamGuestLoopRunning) return;
+      drawTeamGuestFrame();
+      requestAnimationFrame(teamGuestDrawLoop);
+    }
+    function startTeamGuestLiveView() {
+      if (teamGuestLoopRunning) return;
+      teamGuestLoopRunning = true;
+      teamGuestLatestFrame = null;
+      resizeTeamGuestCanvas();
+      requestAnimationFrame(teamGuestDrawLoop);
+    }
+    function stopTeamGuestLiveView() {
+      teamGuestLoopRunning = false;
+      teamGuestLatestFrame = null;
+    }
+
     // Estado local del input remoto del invitado, antes de enviarlo a Firestore.
     let teamGuestInput = { left: false, right: false };
     let teamGuestJumpSeq = 0;
@@ -2405,6 +2538,7 @@
       teamMode = false;
       hideP2Controls();
       updateControlsHint();
+      stopTeamGuestLiveView();
     });
 
     const ROOM_CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // sin 0/O/1/I para evitar confusiones
@@ -2838,6 +2972,7 @@
         return;
       }
       // role === 'guest'
+      if (data.frame) teamGuestLatestFrame = data.frame;
       const finished = !!data.hostFinished;
       teamGuestScoreEl.textContent = finished ? (data.hostFinalScore || 0) : (data.hostScore || 0);
       teamGuestLivesEl.textContent = Math.max(0, data.hostLives ?? START_LIVES);
@@ -2873,6 +3008,7 @@
           teamGuestLivesEl.textContent = START_LIVES;
           teamGuestStatusEl.textContent = '🟢 ¡Jugando!';
           setTeamGuestControlsEnabled(true);
+          startTeamGuestLiveView();
           return;
         }
         // role === 'host': juega normalmente en Modo Equipo, pero el Jugador 2
@@ -2911,6 +3047,29 @@
       if (time - multiplayer.lastSync < 500) return;
       multiplayer.lastSync = time;
       mpSyncNow();
+    }
+
+    // --- Transmite un "frame" ligero (posiciones redondeadas, no un video)
+    // para que el invitado de Supervivencia en Equipo online pueda reconstruir
+    // la partida en su propia pantalla, en vez de solo ver el marcador.
+    // Se limita a ~8 veces por segundo para no saturar Firestore. ---
+    function mpBroadcastFrame(time) {
+      if (!multiplayer || multiplayer.mode !== 'team' || multiplayer.role !== 'host') return;
+      if (gameState !== 'PLAYING') return;
+      if (time - (multiplayer.lastFrameSync || 0) < 120) return;
+      multiplayer.lastFrameSync = time;
+
+      const round = (n) => Math.round(n);
+      const frame = {
+        w: round(cssW), h: round(cssH), gy: round(groundOffset()),
+        p1: [round(player.x), round(player.y)],
+        p2: teamMode ? [round(player2.x), round(player2.y)] : null,
+        obs: obstacles.slice(0, 20).map(o => [round(o.x), round(o.y), round(o.radius)]),
+        ufos: ufos.slice(0, 6).map(u => [round(u.x), round(u.y)])
+      };
+      window.firebaseReady.then(fb => {
+        fb.updateDoc(fb.doc(fb.db, 'rooms', multiplayer.code), { frame }).catch(() => {});
+      });
     }
 
     function mpReportFinished() {
@@ -2958,6 +3117,7 @@
       setTeamGuestControlsEnabled(false);
       teamGuestPanel.style.display = 'none';
       localGameView.style.display = '';
+      stopTeamGuestLiveView();
     }
 
     // El máximo de bolas simultáneas crece con el nivel (empieza escaso, termina intenso)
@@ -4470,6 +4630,7 @@
       updateAmbientFlash(dt);
       updateRain(dt);
       mpThrottledSync(time);
+      mpBroadcastFrame(time);
 
       ctx.save();
       ctx.clearRect(0, 0, cssW, cssH);
