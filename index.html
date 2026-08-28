@@ -971,7 +971,8 @@
            a partir de los "frames" de posición que transmite por Firestore. -->
       <div class="canvas-frame relative w-full rounded-lg overflow-hidden grid-bg border border-amber-500/20 bg-slate-950/50 mb-3">
         <canvas id="teamGuestCanvas" class="absolute inset-0 w-full h-full"></canvas>
-        <div id="team-guest-live-badge" class="absolute top-1.5 right-2 text-[9px] font-mono tracking-wider text-amber-300/80 bg-slate-950/60 border border-amber-500/30 rounded px-1.5 py-0.5">● EN VIVO</div>
+        <video id="teamGuestVideo" class="absolute inset-0 w-full h-full object-contain bg-black" style="display:none;" autoplay playsinline muted></video>
+        <div id="team-guest-live-badge" class="absolute top-1.5 right-2 text-[9px] font-mono tracking-wider text-amber-300/80 bg-slate-950/60 border border-amber-500/30 rounded px-1.5 py-0.5">● CONECTANDO…</div>
       </div>
 
       <div class="flex justify-center items-center gap-4 mb-4 hud-chip border border-amber-500/30 rounded-lg px-3 py-2 font-mono text-xs">
@@ -2358,9 +2359,124 @@
     // =====================================================================
     const teamGuestCanvas = document.getElementById('teamGuestCanvas');
     const teamGuestCtx = teamGuestCanvas.getContext('2d');
+    const teamGuestVideo = document.getElementById('teamGuestVideo');
+    const teamGuestLiveBadge = document.getElementById('team-guest-live-badge');
     let tgCssW = 0, tgCssH = 0;
     let teamGuestLatestFrame = null;
     let teamGuestLoopRunning = false;
+
+    // =====================================================================
+    // --- TRANSMISIÓN REAL DE PANTALLA (WebRTC) ---
+    // Además de la vista reconstruida (arriba), el host intenta transmitir
+    // literalmente su <canvas> del juego al invitado vía WebRTC, usando la
+    // sala de Firestore solo como "buzón" de señalización (SDP + candidatos
+    // ICE), sin servidor propio. Si la conexión no se logra (redes muy
+    // restrictivas, sin TURN configurado, navegador sin soporte), el
+    // invitado simplemente se queda viendo la vista reconstruida de arriba
+    // como respaldo automático. ---
+    // =====================================================================
+    const RTC_CONFIG = {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' }
+      ]
+    };
+    let webrtcPC = null;
+    let webrtcCandidatesUnsub = null;
+
+    function teardownWebRTC() {
+      if (webrtcPC) { try { webrtcPC.close(); } catch (e) {} webrtcPC = null; }
+      if (webrtcCandidatesUnsub) { webrtcCandidatesUnsub(); webrtcCandidatesUnsub = null; }
+      if (teamGuestVideo) { try { teamGuestVideo.srcObject = null; } catch (e) {} teamGuestVideo.style.display = 'none'; }
+      if (teamGuestCanvas) teamGuestCanvas.style.display = '';
+      if (teamGuestLiveBadge) teamGuestLiveBadge.textContent = '● CONECTANDO…';
+    }
+
+    // --- HOST: comparte literalmente su <canvas> del juego como video. ---
+    async function startHostScreenShare() {
+      if (!multiplayer || multiplayer.mode !== 'team' || multiplayer.role !== 'host') return;
+      if (typeof canvas.captureStream !== 'function') {
+        console.warn('Este navegador no soporta canvas.captureStream(); el invitado usará la vista reconstruida.');
+        return;
+      }
+      try {
+        webrtcPC = new RTCPeerConnection(RTC_CONFIG);
+        const stream = canvas.captureStream(15); // 15 fps: suficiente y ahorra datos/batería
+        stream.getTracks().forEach(t => webrtcPC.addTrack(t, stream));
+
+        webrtcPC.onicecandidate = (e) => {
+          if (!e.candidate || !multiplayer) return;
+          window.firebaseReady.then(fb => {
+            fb.addDoc(fb.collection(fb.db, 'rooms', multiplayer.code, 'hostCandidates'), e.candidate.toJSON()).catch(() => {});
+          });
+        };
+
+        const offer = await webrtcPC.createOffer();
+        await webrtcPC.setLocalDescription(offer);
+        window.firebaseReady.then(fb => {
+          fb.updateDoc(fb.doc(fb.db, 'rooms', multiplayer.code), {
+            webrtcOffer: { type: offer.type, sdp: offer.sdp }
+          }).catch(() => {});
+        });
+
+        window.firebaseReady.then(fb => {
+          if (!multiplayer) return;
+          const ref = fb.collection(fb.db, 'rooms', multiplayer.code, 'guestCandidates');
+          webrtcCandidatesUnsub = fb.onSnapshot(ref, (snap) => {
+            snap.docChanges().forEach(change => {
+              if (change.type === 'added' && webrtcPC) {
+                webrtcPC.addIceCandidate(new RTCIceCandidate(change.doc.data())).catch(() => {});
+              }
+            });
+          });
+        });
+      } catch (e) {
+        console.error('No se pudo iniciar la transmisión de pantalla:', e);
+      }
+    }
+
+    // --- INVITADO: recibe la oferta del host y responde. ---
+    async function startGuestWebRTC(offer) {
+      if (webrtcPC || !multiplayer) return;
+      try {
+        webrtcPC = new RTCPeerConnection(RTC_CONFIG);
+        webrtcPC.ontrack = (e) => {
+          teamGuestVideo.srcObject = e.streams[0];
+          teamGuestVideo.style.display = '';
+          teamGuestCanvas.style.display = 'none';
+          if (teamGuestLiveBadge) teamGuestLiveBadge.textContent = '● EN VIVO';
+        };
+        webrtcPC.onicecandidate = (e) => {
+          if (!e.candidate || !multiplayer) return;
+          window.firebaseReady.then(fb => {
+            fb.addDoc(fb.collection(fb.db, 'rooms', multiplayer.code, 'guestCandidates'), e.candidate.toJSON()).catch(() => {});
+          });
+        };
+
+        await webrtcPC.setRemoteDescription(new RTCSessionDescription(offer));
+        const answer = await webrtcPC.createAnswer();
+        await webrtcPC.setLocalDescription(answer);
+        window.firebaseReady.then(fb => {
+          fb.updateDoc(fb.doc(fb.db, 'rooms', multiplayer.code), {
+            webrtcAnswer: { type: answer.type, sdp: answer.sdp }
+          }).catch(() => {});
+        });
+
+        window.firebaseReady.then(fb => {
+          if (!multiplayer) return;
+          const ref = fb.collection(fb.db, 'rooms', multiplayer.code, 'hostCandidates');
+          webrtcCandidatesUnsub = fb.onSnapshot(ref, (snap) => {
+            snap.docChanges().forEach(change => {
+              if (change.type === 'added' && webrtcPC) {
+                webrtcPC.addIceCandidate(new RTCIceCandidate(change.doc.data())).catch(() => {});
+              }
+            });
+          });
+        });
+      } catch (e) {
+        console.error('No se pudo conectar el video en vivo, se usará la vista reconstruida:', e);
+      }
+    }
 
     function resizeTeamGuestCanvas() {
       const rect = teamGuestCanvas.parentElement.getBoundingClientRect();
@@ -2969,10 +3085,19 @@
           multiplayer.lastGuestJumpSeq = seq;
           tryJump2();
         }
+        // El invitado ya respondió a nuestra oferta: completamos la conexión.
+        if (data.webrtcAnswer && webrtcPC && !webrtcPC.currentRemoteDescription) {
+          webrtcPC.setRemoteDescription(new RTCSessionDescription(data.webrtcAnswer)).catch(() => {});
+        }
         return;
       }
       // role === 'guest'
       if (data.frame) teamGuestLatestFrame = data.frame;
+      // El host nos envió su oferta de video: respondemos para intentar ver
+      // su pantalla real (si falla, seguimos con la vista reconstruida).
+      if (data.webrtcOffer && !webrtcPC) {
+        startGuestWebRTC(data.webrtcOffer);
+      }
       const finished = !!data.hostFinished;
       teamGuestScoreEl.textContent = finished ? (data.hostFinalScore || 0) : (data.hostScore || 0);
       teamGuestLivesEl.textContent = Math.max(0, data.hostLives ?? START_LIVES);
@@ -3017,6 +3142,7 @@
         hideP2Controls();
         updateControlsHint();
         resetGame();
+        startHostScreenShare();
         return;
       }
 
@@ -3118,6 +3244,7 @@
       teamGuestPanel.style.display = 'none';
       localGameView.style.display = '';
       stopTeamGuestLiveView();
+      teardownWebRTC();
     }
 
     // El máximo de bolas simultáneas crece con el nivel (empieza escaso, termina intenso)
