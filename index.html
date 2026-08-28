@@ -2008,6 +2008,10 @@
         const docRef = await fb.addDoc(fb.collection(fb.db, 'scores'), {
           score: finalScore,
           timeMs,
+          playerName: currentUser ? currentUser.name : 'Anónimo',
+          countryCode: currentUser ? currentUser.countryCode : null,
+          countryName: currentUser ? currentUser.countryName : null,
+          flag: currentUser ? currentUser.flag : '🏳️',
           createdAt: fb.serverTimestamp()
         });
         lastSavedScoreKey = docRef.id;
@@ -2032,7 +2036,14 @@
         snap.forEach((docSnap) => {
           const d = docSnap.data();
           if (typeof d.score === 'number' && typeof d.timeMs === 'number') {
-            records.push({ key: docSnap.id, score: d.score, timeMs: d.timeMs });
+            records.push({
+              key: docSnap.id,
+              score: d.score,
+              timeMs: d.timeMs,
+              playerName: d.playerName || 'Anónimo',
+              flag: d.flag || '🏳️',
+              countryName: d.countryName || ''
+            });
           }
         });
 
@@ -2047,12 +2058,11 @@
         leaderboardStatus.textContent = total + ' partida' + (total === 1 ? '' : 's') + ' registrada' + (total === 1 ? '' : 's');
 
         const top = records.slice(0, 10);
-        leaderboardBody.innerHTML = top.map((rec, i) => {
-          // Porcentaje de jugadores a los que este resultado supera o iguala
-          const beats = total > 1 ? Math.round(((total - 1 - i) / (total - 1)) * 100) : 100;
+        leaderboardBody.innerHTML = top.map((rec) => {
           const isMine = rec.key === lastSavedScoreKey;
-          return `<tr class="${isMine ? 'bg-blue-500/20' : ''}">` +
-            `<td class="px-2 py-1 text-blue-300 font-bold">${beats}%</td>` +
+          const playerLabel = `${rec.flag} ${escapeHtml(rec.playerName)}`;
+          return `<tr class="${isMine ? 'bg-blue-500/20' : ''}" title="${escapeHtml(rec.countryName)}">` +
+            `<td class="px-2 py-1 text-blue-300 font-bold truncate max-w-[110px]">${playerLabel}</td>` +
             `<td class="px-2 py-1 text-center text-slate-200">${formatTime(rec.timeMs)}</td>` +
             `<td class="px-2 py-1 text-right text-white font-bold">${rec.score}</td>` +
           `</tr>`;
@@ -2126,6 +2136,20 @@
       return out;
     }
 
+    // Detecta si el jugador está en móvil o en escritorio, para exigir que
+    // ambos rivales de una sala jueguen desde el mismo tipo de dispositivo
+    // (evita ventajas/desventajas por controles táctiles vs. teclado).
+    function detectDeviceType() {
+      const ua = navigator.userAgent || '';
+      const isMobileUA = /Android|iPhone|iPad|iPod|Windows Phone|BlackBerry|IEMobile|Opera Mini/i.test(ua);
+      const isCoarsePointer = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+      return (isMobileUA || (isCoarsePointer && window.innerWidth < 900)) ? 'mobile' : 'desktop';
+    }
+    const DEVICE_TYPE = detectDeviceType();
+    function deviceLabel(type) {
+      return type === 'mobile' ? '📱 Móvil' : '💻 Escritorio';
+    }
+
     // Estado de la sala mientras se está formando (antes de empezar a jugar)
     let roomFlow = { code: null, role: null, unsub: null, countdownTimer: null };
     // Estado de la partida multijugador activa (durante PLAYING/GAMEOVER)
@@ -2156,6 +2180,21 @@
     }
     async function deleteDocSafe(fb, code) {
       try { await fb.deleteDoc(fb.doc(fb.db, 'rooms', code)); } catch (e) { /* ignorar */ }
+    }
+
+    // Traduce errores de Firebase a mensajes legibles, para saber exactamente
+    // qué está fallando (por ejemplo, reglas de seguridad de Firestore que no
+    // dejan escribir en la colección "rooms").
+    function roomErrorMessage(e) {
+      const code = e && e.code;
+      if (code === 'permission-denied') {
+        return 'Permiso denegado por Firestore (revisa las reglas de seguridad de la colección "rooms").';
+      }
+      if (code === 'unavailable' || code === 'network-request-failed') {
+        return 'Sin conexión con el servidor. Revisa tu internet.';
+      }
+      if (code) return 'Error de Firebase: ' + code;
+      return 'Error inesperado. Inténtalo de nuevo.';
     }
 
     function renderRoomMenu() {
@@ -2233,6 +2272,7 @@
       roomModalBody.innerHTML = `
         <p class="room-status-line">Comparte este código con tu rival:</p>
         <div class="room-code-display">${escapeHtml(code)}</div>
+        <p class="room-status-line">${deviceLabel(DEVICE_TYPE)} — tu rival debe unirse desde el mismo tipo de dispositivo</p>
         ${hasPassword ? '<p class="room-status-line">🔒 Sala protegida con contraseña</p>' : ''}
         <div class="room-spinner"></div>
         <p class="room-status-line" id="room-wait-msg">Esperando oponente…</p>
@@ -2271,8 +2311,8 @@
           status: 'waiting',
           createdAt: fb.serverTimestamp(),
           hasPassword, password: hasPassword ? password : null,
-          hostName: currentUser.name, hostCountry: currentUser.flag,
-          guestName: null, guestCountry: null,
+          hostName: currentUser.name, hostCountry: currentUser.flag, hostDevice: DEVICE_TYPE,
+          guestName: null, guestCountry: null, guestDevice: null,
           hostScore: 0, hostLives: START_LIVES, hostFinished: false, hostFinalScore: 0, hostFinalTime: 0,
           guestScore: 0, guestLives: START_LIVES, guestFinished: false, guestFinalScore: 0, guestFinalTime: 0,
           startAt: null
@@ -2283,7 +2323,7 @@
         listenRoom(code, 'host');
       } catch (e) {
         console.error('Error creando sala:', e);
-        roomModalBody.innerHTML = `<p class="room-error">No se pudo crear la sala. Inténtalo de nuevo.</p><button id="room-back-btn" class="room-btn secondary">Volver</button>`;
+        roomModalBody.innerHTML = `<p class="room-error">${escapeHtml(roomErrorMessage(e))}</p><button id="room-back-btn" class="room-btn secondary">Volver</button>`;
         document.getElementById('room-back-btn').addEventListener('click', renderRoomMenu);
       }
     }
@@ -2300,6 +2340,10 @@
         if (!snap.exists()) { if (errEl) errEl.textContent = 'No existe una sala con ese código.'; return; }
         const data = snap.data();
         if (data.status !== 'waiting') { if (errEl) errEl.textContent = 'Esa sala ya no está disponible.'; return; }
+        if (data.hostDevice && data.hostDevice !== DEVICE_TYPE) {
+          if (errEl) errEl.textContent = `Esta sala fue creada desde ${deviceLabel(data.hostDevice)}. Debes unirte desde el mismo tipo de dispositivo (estás en ${deviceLabel(DEVICE_TYPE)}).`;
+          return;
+        }
 
         if (data.hasPassword) {
           renderJoinPasswordForm(code);
@@ -2308,7 +2352,7 @@
         }
       } catch (e) {
         console.error('Error uniéndose a sala:', e);
-        if (errEl) errEl.textContent = 'Error de conexión. Inténtalo de nuevo.';
+        if (errEl) errEl.textContent = roomErrorMessage(e);
       }
     }
 
@@ -2322,11 +2366,15 @@
         if (!snap.exists()) { if (errEl) errEl.textContent = 'Esta sala ya no existe.'; return; }
         const data = snap.data();
         if (data.status !== 'waiting') { if (errEl) errEl.textContent = 'Esa sala ya no está disponible.'; return; }
+        if (data.hostDevice && data.hostDevice !== DEVICE_TYPE) {
+          if (errEl) errEl.textContent = `Esta sala fue creada desde ${deviceLabel(data.hostDevice)}. Debes unirte desde el mismo tipo de dispositivo.`;
+          return;
+        }
         if (data.password !== password) { if (errEl) errEl.textContent = 'Contraseña incorrecta.'; return; }
         await completeJoin(code);
       } catch (e) {
         console.error('Error uniéndose a sala:', e);
-        if (errEl) errEl.textContent = 'Error de conexión. Inténtalo de nuevo.';
+        if (errEl) errEl.textContent = roomErrorMessage(e);
       }
     }
 
@@ -2336,7 +2384,7 @@
       const ref = fb.doc(fb.db, 'rooms', code);
       const startAt = Date.now() + 4000;
       await fb.updateDoc(ref, {
-        guestName: currentUser.name, guestCountry: currentUser.flag,
+        guestName: currentUser.name, guestCountry: currentUser.flag, guestDevice: DEVICE_TYPE,
         status: 'ready', startAt
       });
 
