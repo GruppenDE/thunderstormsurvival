@@ -2364,6 +2364,7 @@
     let tgCssW = 0, tgCssH = 0;
     let teamGuestLatestFrame = null;
     let teamGuestLoopRunning = false;
+    let teamGuestViewStartedAt = 0;
 
     // =====================================================================
     // --- TRANSMISIÓN REAL DE PANTALLA (WebRTC) ---
@@ -2407,7 +2408,7 @@
         webrtcPC.onicecandidate = (e) => {
           if (!e.candidate || !multiplayer) return;
           window.firebaseReady.then(fb => {
-            fb.addDoc(fb.collection(fb.db, 'rooms', multiplayer.code, 'hostCandidates'), e.candidate.toJSON()).catch(() => {});
+            fb.addDoc(fb.collection(fb.db, 'rooms', multiplayer.code, 'hostCandidates'), e.candidate.toJSON()).catch((err) => console.error('[webrtc host] Error guardando candidato ICE:', err));
           });
         };
 
@@ -2416,7 +2417,7 @@
         window.firebaseReady.then(fb => {
           fb.updateDoc(fb.doc(fb.db, 'rooms', multiplayer.code), {
             webrtcOffer: { type: offer.type, sdp: offer.sdp }
-          }).catch(() => {});
+          }).catch((err) => console.error('[webrtc host] Error guardando la oferta:', err));
         });
 
         window.firebaseReady.then(fb => {
@@ -2449,7 +2450,7 @@
         webrtcPC.onicecandidate = (e) => {
           if (!e.candidate || !multiplayer) return;
           window.firebaseReady.then(fb => {
-            fb.addDoc(fb.collection(fb.db, 'rooms', multiplayer.code, 'guestCandidates'), e.candidate.toJSON()).catch(() => {});
+            fb.addDoc(fb.collection(fb.db, 'rooms', multiplayer.code, 'guestCandidates'), e.candidate.toJSON()).catch((err) => console.error('[webrtc guest] Error guardando candidato ICE:', err));
           });
         };
 
@@ -2459,7 +2460,7 @@
         window.firebaseReady.then(fb => {
           fb.updateDoc(fb.doc(fb.db, 'rooms', multiplayer.code), {
             webrtcAnswer: { type: answer.type, sdp: answer.sdp }
-          }).catch(() => {});
+          }).catch((err) => console.error('[webrtc guest] Error guardando la respuesta:', err));
         });
 
         window.firebaseReady.then(fb => {
@@ -2501,6 +2502,12 @@
         ctx.font = '11px ui-monospace, monospace';
         ctx.textAlign = 'center';
         ctx.fillText('Esperando la señal de la partida…', tgCssW / 2, tgCssH / 2);
+        if (performance.now() - teamGuestViewStartedAt > 6000) {
+          ctx.font = '9.5px ui-monospace, monospace';
+          ctx.fillStyle = 'rgba(248,113,113,0.75)';
+          ctx.fillText('Tarda demasiado: revisa la consola del navegador', tgCssW / 2, tgCssH / 2 + 18);
+          ctx.fillText('y las reglas de seguridad de Firestore ("rooms").', tgCssW / 2, tgCssH / 2 + 32);
+        }
         return;
       }
       const sx = tgCssW / f.w, sy = tgCssH / f.h;
@@ -2581,6 +2588,7 @@
       if (teamGuestLoopRunning) return;
       teamGuestLoopRunning = true;
       teamGuestLatestFrame = null;
+      teamGuestViewStartedAt = performance.now();
       resizeTeamGuestCanvas();
       requestAnimationFrame(teamGuestDrawLoop);
     }
@@ -3194,7 +3202,12 @@
         ufos: ufos.slice(0, 6).map(u => [round(u.x), round(u.y)])
       };
       window.firebaseReady.then(fb => {
-        fb.updateDoc(fb.doc(fb.db, 'rooms', multiplayer.code), { frame }).catch(() => {});
+        fb.updateDoc(fb.doc(fb.db, 'rooms', multiplayer.code), { frame }).catch((err) => {
+          // Si esto falla repetidamente con code 'permission-denied', las reglas de
+          // seguridad de Firestore están rechazando el campo "frame" (revisa la
+          // consola de Firebase: Firestore Database > Reglas).
+          console.error('[frame sync] Error enviando el frame al invitado:', err);
+        });
       });
     }
 
