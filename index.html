@@ -16,7 +16,7 @@
   import { getAnalytics, isSupported as analyticsIsSupported } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-analytics.js";
   import {
     getFirestore, collection, addDoc, getDocs, query, orderBy, limit, serverTimestamp,
-    doc, setDoc, getDoc, onSnapshot, updateDoc, deleteDoc
+    doc, setDoc, getDoc, onSnapshot, updateDoc, deleteDoc, increment
   } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js";
   import {
     getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut,
@@ -46,7 +46,7 @@
   // login/registro de cuentas (Firebase Authentication + Firestore) del juego.
   window.__resolveFirebaseReady({
     db, collection, addDoc, getDocs, query, orderBy, limit, serverTimestamp,
-    doc, setDoc, getDoc, onSnapshot, updateDoc, deleteDoc,
+    doc, setDoc, getDoc, onSnapshot, updateDoc, deleteDoc, increment,
     auth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut
   });
 </script>
@@ -547,16 +547,21 @@
   }
   .user-badge.show{ display:inline-flex; }
   .logout-btn{
-    display:inline-flex; align-items:center; justify-content:center;
-    width:16px; height:16px; margin-left:2px; padding:0;
-    border-radius:50%; border:1px solid rgba(248,113,113,0.4);
-    background: rgba(248,113,113,0.12); color:#fca5a5;
-    font-size:9px; line-height:1; cursor:pointer;
-    transition: background-color 0.15s ease, transform 0.15s ease;
+    display:inline-flex; align-items:center; justify-content:center; gap:4px;
+    height:20px; margin-left:6px; padding:0 9px;
+    border-radius:999px; border:1px solid rgba(248,113,113,0.35);
+    background: linear-gradient(to bottom, rgba(248,113,113,0.14), rgba(248,113,113,0.06));
+    color:#fca5a5;
+    font-family: ui-monospace, monospace;
+    font-size:9px; font-weight:700; letter-spacing:0.04em; line-height:1;
+    cursor:pointer;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.25);
+    transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, transform 0.1s ease, box-shadow 0.15s ease;
   }
-  .logout-btn:hover{ background: rgba(248,113,113,0.3); color:#fecaca; }
-  .logout-btn:active{ transform: scale(0.9); }
-  .logout-btn:disabled{ opacity:0.5; cursor:not-allowed; }
+  .logout-btn svg{ width:10px; height:10px; flex-shrink:0; }
+  .logout-btn:hover{ background: linear-gradient(to bottom, rgba(248,113,113,0.3), rgba(248,113,113,0.14)); border-color: rgba(248,113,113,0.6); color:#fecaca; box-shadow: 0 1px 4px rgba(248,113,113,0.25); }
+  .logout-btn:active{ transform: scale(0.94); }
+  .logout-btn:disabled{ opacity:0.5; cursor:not-allowed; transform:none; }
   .logout-btn:focus-visible{ outline: 2px solid var(--blue-300); outline-offset: 2px; }
 
   /* ================= MODO 2 JUGADORES: MODAL DE SALA ================= */
@@ -609,6 +614,13 @@
     background: rgba(15,23,42,0.7); border:1px solid rgba(59,130,246,0.35); box-shadow:none;
   }
   .room-btn:disabled{ opacity:0.5; cursor:not-allowed; transform:none; box-shadow:none; }
+
+  /* ================= Panel de Jugador 2 remoto (Supervivencia en Equipo online) ================= */
+  .team-guest-card{
+    background: linear-gradient(to bottom, var(--panel), var(--void));
+    border: 1px solid rgba(245,158,11,0.35);
+    box-shadow: 0 0 30px rgba(245,158,11,0.12), inset 0 0 40px rgba(245,158,11,0.03);
+  }
   .room-input{
     width:100%; background: rgba(15,23,42,0.7); border: 1px solid rgba(59,130,246,0.35);
     color:#f8fafc; font-size:18px; letter-spacing:0.35em; text-align:center; text-transform:uppercase;
@@ -805,12 +817,16 @@
     <p class="text-[10px] sm:text-xs text-slate-400 tracking-widest mt-1">MAKASIAR ADAM // GAME DEVELOPER</p>
     <div id="user-badge" class="user-badge">
       <span id="user-badge-text"></span>
-      <button id="logout-btn" class="logout-btn" type="button" aria-label="Cerrar sesión" title="Cerrar sesión">⏻</button>
+      <button id="logout-btn" class="logout-btn" type="button" aria-label="Cerrar sesión" title="Cerrar sesión">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+        <span>SALIR</span>
+      </button>
     </div>
   </header>
 
   <!-- Contenedor Principal del Juego -->
   <main class="w-full max-w-md md:max-w-2xl lg:max-w-4xl flex flex-col items-center relative z-10">
+    <div id="local-game-view" class="w-full flex flex-col items-center">
     <div class="game-container w-full rounded-xl p-2.5 sm:p-3 relative overflow-hidden">
 
       <!-- Tabla de Clasificación Global (datos compartidos entre todos los jugadores) -->
@@ -940,6 +956,29 @@
         <button id="p2-btn-jump" class="touch-btn flex-1 bg-amber-900/40 border border-amber-700/60 py-3 rounded-lg text-xs font-bold text-amber-200">▲ SALTO</button>
         <button id="p2-btn-right" class="touch-btn flex-1 bg-amber-900/40 border border-amber-700/60 py-3 rounded-lg text-xs font-bold text-amber-200">DERECHA ▶</button>
       </div>
+    </div>
+    </div><!-- /local-game-view -->
+
+    <!-- Panel de control remoto del Jugador 2: se muestra en el dispositivo del
+         invitado cuando se une a una sala de Supervivencia en Equipo online.
+         La partida se ejecuta y se ve en la pantalla de quien creó la sala;
+         este dispositivo solo envía sus movimientos e informa el marcador. -->
+    <div id="team-guest-panel" class="team-guest-card w-full rounded-xl p-4 relative" style="display:none;">
+      <h2 class="text-sm font-bold text-amber-400 font-mono tracking-wider text-center mb-1">🎮 JUGADOR 2 REMOTO</h2>
+      <p class="text-[11px] text-slate-300 text-center mb-4">Estás jugando en la pantalla de <b id="team-guest-host-name">tu compañero</b>. Muévete con los botones o con ←/→/↑.</p>
+
+      <div class="flex justify-center items-center gap-4 mb-4 hud-chip border border-amber-500/30 rounded-lg px-3 py-2 font-mono text-xs">
+        <span>⭐ <span id="team-guest-score">0</span></span>
+        <span>❤️ <span id="team-guest-lives">3</span></span>
+        <span id="team-guest-status" class="text-amber-300"></span>
+      </div>
+
+      <div class="flex justify-between w-full gap-2 mb-2">
+        <button id="team-guest-btn-left" class="touch-btn flex-1 bg-amber-900/40 border border-amber-700/60 py-4 rounded-lg text-sm font-bold text-amber-200">◀ IZQUIERDA</button>
+        <button id="team-guest-btn-jump" class="touch-btn flex-1 bg-amber-900/40 border border-amber-700/60 py-4 rounded-lg text-sm font-bold text-amber-200">▲ SALTO</button>
+        <button id="team-guest-btn-right" class="touch-btn flex-1 bg-amber-900/40 border border-amber-700/60 py-4 rounded-lg text-sm font-bold text-amber-200">DERECHA ▶</button>
+      </div>
+      <button id="team-guest-leave-btn" class="room-btn secondary w-full mt-2">Salir de la sala</button>
     </div>
   </main>
 
@@ -1993,8 +2032,13 @@
     const controlsHintMobile = document.getElementById('controls-hint-mobile');
     function updateControlsHint() {
       if (teamMode) {
-        controlsHintDesktop.textContent = 'P1: A/D MOVE · W/ESPACIO SALTO   —   P2: ←/→ MOVE · ↑ SALTO';
-        controlsHintMobile.textContent = 'EQUIPO: USA LOS BOTONES ▼';
+        if (multiplayer && multiplayer.mode === 'team' && multiplayer.role === 'host') {
+          controlsHintDesktop.textContent = `P1 (TÚ): A/D MOVE · W/ESPACIO SALTO   —   P2: ${multiplayer.opponentName || 'compañero'} (remoto)`;
+          controlsHintMobile.textContent = 'TÚ ERES J1 · TU COMPAÑERO JUEGA REMOTO';
+        } else {
+          controlsHintDesktop.textContent = 'P1: A/D MOVE · W/ESPACIO SALTO   —   P2: ←/→ MOVE · ↑ SALTO';
+          controlsHintMobile.textContent = 'EQUIPO: USA LOS BOTONES ▼';
+        }
       } else {
         controlsHintDesktop.textContent = 'A/D MOVE   W/SPACE JUMP   ↑/F DISPARO (Nivel 10+)';
         controlsHintMobile.textContent = 'TOCA LOS BOTONES ▼';
@@ -2284,6 +2328,85 @@
     const mpOpponentStatus = document.getElementById('mp-opponent-status');
     const mpResultEl = document.getElementById('mp-result');
 
+    // --- Panel de control remoto del invitado en Supervivencia en Equipo online ---
+    const localGameView = document.getElementById('local-game-view');
+    const teamGuestPanel = document.getElementById('team-guest-panel');
+    const teamGuestHostNameEl = document.getElementById('team-guest-host-name');
+    const teamGuestScoreEl = document.getElementById('team-guest-score');
+    const teamGuestLivesEl = document.getElementById('team-guest-lives');
+    const teamGuestStatusEl = document.getElementById('team-guest-status');
+    const teamGuestBtnLeft = document.getElementById('team-guest-btn-left');
+    const teamGuestBtnJump = document.getElementById('team-guest-btn-jump');
+    const teamGuestBtnRight = document.getElementById('team-guest-btn-right');
+    const teamGuestLeaveBtn = document.getElementById('team-guest-leave-btn');
+
+    // Estado local del input remoto del invitado, antes de enviarlo a Firestore.
+    let teamGuestInput = { left: false, right: false };
+    let teamGuestJumpSeq = 0;
+    let teamGuestControlsEnabled = false;
+
+    function setTeamGuestControlsEnabled(enabled) {
+      teamGuestControlsEnabled = enabled;
+      [teamGuestBtnLeft, teamGuestBtnJump, teamGuestBtnRight].forEach((btn) => {
+        btn.disabled = !enabled;
+        btn.style.opacity = enabled ? '' : '0.4';
+        btn.style.pointerEvents = enabled ? '' : 'none';
+      });
+      if (!enabled) { teamGuestInput.left = false; teamGuestInput.right = false; }
+    }
+
+    // Envía mi estado de movimiento (izquierda/derecha) al host en cuanto cambia.
+    function sendTeamGuestMove() {
+      if (!multiplayer || multiplayer.mode !== 'team' || multiplayer.role !== 'guest') return;
+      window.firebaseReady.then(fb => {
+        fb.updateDoc(fb.doc(fb.db, 'rooms', multiplayer.code), {
+          guestLeft: teamGuestInput.left,
+          guestRight: teamGuestInput.right
+        }).catch(() => {});
+      });
+    }
+
+    function teamGuestSetLeft(v) { if (!teamGuestControlsEnabled) return; teamGuestInput.left = v; sendTeamGuestMove(); }
+    function teamGuestSetRight(v) { if (!teamGuestControlsEnabled) return; teamGuestInput.right = v; sendTeamGuestMove(); }
+
+    // Envía un salto: incrementa un contador en Firestore (`increment`) para que
+    // el host detecte el "flanco" de un nuevo salto en cuanto llegue el snapshot.
+    function teamGuestJump() {
+      if (!teamGuestControlsEnabled || !multiplayer || multiplayer.mode !== 'team' || multiplayer.role !== 'guest') return;
+      window.firebaseReady.then(fb => {
+        fb.updateDoc(fb.doc(fb.db, 'rooms', multiplayer.code), {
+          guestJumpSeq: fb.increment(1)
+        }).catch(() => {});
+      });
+    }
+
+    bindHold(teamGuestBtnLeft, () => teamGuestSetLeft(true), () => teamGuestSetLeft(false));
+    bindHold(teamGuestBtnRight, () => teamGuestSetRight(true), () => teamGuestSetRight(false));
+    bindHold(teamGuestBtnJump, () => teamGuestJump());
+
+    // Soporte de teclado (←/→/↑) en el dispositivo del invitado, igual que en
+    // Modo Equipo local, pero enviando el input por red en vez de aplicarlo
+    // directamente (aquí no corre ninguna simulación local).
+    window.addEventListener('keydown', (e) => {
+      if (!teamGuestControlsEnabled) return;
+      if (e.code === 'ArrowLeft') { e.preventDefault(); teamGuestSetLeft(true); }
+      if (e.code === 'ArrowRight') { e.preventDefault(); teamGuestSetRight(true); }
+      if (e.code === 'ArrowUp') { e.preventDefault(); teamGuestJump(); }
+    });
+    window.addEventListener('keyup', (e) => {
+      if (!teamGuestControlsEnabled) return;
+      if (e.code === 'ArrowLeft') teamGuestSetLeft(false);
+      if (e.code === 'ArrowRight') teamGuestSetRight(false);
+    });
+
+    // Salir de la sala desde el panel del invitado: vuelve a la pantalla normal.
+    teamGuestLeaveBtn.addEventListener('click', () => {
+      leaveMultiplayer();
+      teamMode = false;
+      hideP2Controls();
+      updateControlsHint();
+    });
+
     const ROOM_CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // sin 0/O/1/I para evitar confusiones
     function generateRoomCode() {
       let out = '';
@@ -2314,7 +2437,9 @@
     // juega con un solo jugador o con dos (Jugador 1 + Jugador 2 en equipo).
     let pendingRoomMode = 'versus';
     function roomModeLabel(mode) {
-      return mode === 'duo' ? '2 vs 2' : 'Versus (1 vs 1)';
+      if (mode === 'duo') return '2 vs 2';
+      if (mode === 'team') return '🛡️ Supervivencia en Equipo';
+      return 'Versus (1 vs 1)';
     }
 
     function openRoomModal() {
@@ -2331,11 +2456,26 @@
         <button id="mode-duo-btn" class="room-btn" style="margin-top:12px;">⚔️ Modo 2 vs 2</button>
         <p class="room-status-line" style="margin-top:-6px; opacity:0.75; font-size:9.5px;">Dos equipos online (2 jugadores por dispositivo, comparten vidas y puntaje). Gana el equipo con mayor puntaje combinado.</p>
         <button id="mode-team-btn" class="room-btn secondary" style="margin-top:12px;">🛡️ Supervivencia en Equipo</button>
-        <p class="room-status-line" style="margin-top:-6px; opacity:0.75; font-size:9.5px;">Dos jugadores, una sola pantalla: comparten vidas y puntaje. ¡Sobrevivan juntos!</p>
+        <p class="room-status-line" style="margin-top:-6px; opacity:0.75; font-size:9.5px;">Dos jugadores comparten vidas y puntaje, sobreviviendo juntos en la misma partida. ¡Sobrevivan juntos!</p>
       `;
       document.getElementById('mode-versus-btn').addEventListener('click', () => { pendingRoomMode = 'versus'; renderRoomMenu(); });
       document.getElementById('mode-duo-btn').addEventListener('click', () => { pendingRoomMode = 'duo'; renderRoomMenu(); });
-      document.getElementById('mode-team-btn').addEventListener('click', startTeamSurvival);
+      document.getElementById('mode-team-btn').addEventListener('click', renderTeamSubmenu);
+    }
+
+    // --- Supervivencia en Equipo: ahora se puede jugar de 2 formas ---
+    function renderTeamSubmenu() {
+      roomModalBody.innerHTML = `
+        <p class="room-status-line">¿Cómo van a jugar en equipo?</p>
+        <button id="team-local-btn" class="room-btn">📱 Mismo dispositivo</button>
+        <p class="room-status-line" style="margin-top:-6px; opacity:0.75; font-size:9.5px;">Los 2 jugadores comparten este dispositivo (J1: A/D/W · J2: ←/→/↑).</p>
+        <button id="team-online-btn" class="room-btn" style="margin-top:12px;">📶 Crear sala online</button>
+        <p class="room-status-line" style="margin-top:-6px; opacity:0.75; font-size:9.5px;">Tu compañero se conecta desde su propio dispositivo con un código. La partida se juega en una sola pantalla: la de quien crea la sala.</p>
+        <button id="team-back-btn" class="room-btn secondary" style="margin-top:12px;">◀ Cambiar modo</button>
+      `;
+      document.getElementById('team-local-btn').addEventListener('click', startTeamSurvival);
+      document.getElementById('team-online-btn').addEventListener('click', () => { pendingRoomMode = 'team'; renderRoomMenu(); });
+      document.getElementById('team-back-btn').addEventListener('click', renderModeChooser);
     }
 
     // Inicia el modo Supervivencia en Equipo: local, en el mismo dispositivo,
@@ -2390,6 +2530,8 @@
     function renderRoomMenu() {
       const introText = pendingRoomMode === 'duo'
         ? 'Modo 2 vs 2: tu equipo (2 jugadores en este dispositivo) se enfrenta en tiempo real a otro equipo (2 jugadores en otro dispositivo).'
+        : pendingRoomMode === 'team'
+        ? 'Supervivencia en Equipo online: tu compañero se conecta desde su propio dispositivo. La partida se ve y se juega en la pantalla de quien crea la sala; comparten vidas y puntaje.'
         : 'Juega en tiempo real contra otra persona, cada uno desde su propio dispositivo.';
       roomModalBody.innerHTML = `
         <p class="room-status-line">${introText}</p>
@@ -2433,7 +2575,7 @@
     }
 
     function renderJoinForm() {
-      const rivalWord = pendingRoomMode === 'duo' ? 'el otro equipo' : 'tu rival';
+      const rivalWord = pendingRoomMode === 'duo' ? 'el otro equipo' : pendingRoomMode === 'team' ? 'tu compañero de equipo' : 'tu rival';
       roomModalBody.innerHTML = `
         <p class="room-status-line">Ingresa el código de 5 caracteres que te compartió ${rivalWord}. Asegúrate de haber elegido el mismo modo (${escapeHtml(roomModeLabel(pendingRoomMode))}).</p>
         <input id="room-join-input" class="room-input" maxlength="5" placeholder="XXXXX" autocomplete="off">
@@ -2465,10 +2607,12 @@
     }
 
     function renderRoomWaiting(code, hasPassword, mode) {
-      const rivalWord = mode === 'duo' ? 'con el equipo rival' : 'con tu rival';
-      const waitWord = mode === 'duo' ? 'Esperando al equipo rival…' : 'Esperando oponente…';
+      const rivalWord = mode === 'duo' ? 'con el equipo rival' : mode === 'team' ? 'con tu compañero de equipo' : 'con tu rival';
+      const waitWord = mode === 'duo' ? 'Esperando al equipo rival…' : mode === 'team' ? 'Esperando a tu compañero…' : 'Esperando oponente…';
       const deviceHint = mode === 'duo'
         ? `${deviceLabel(DEVICE_TYPE)} — los 2 jugadores de tu equipo juegan en este dispositivo; el equipo rival debe unirse desde el mismo tipo de dispositivo`
+        : mode === 'team'
+        ? `${deviceLabel(DEVICE_TYPE)} — la partida se jugará en esta pantalla; tu compañero la controlará de forma remota desde su propio dispositivo`
         : `${deviceLabel(DEVICE_TYPE)} — tu rival debe unirse desde el mismo tipo de dispositivo`;
       roomModalBody.innerHTML = `
         <p class="room-status-line">Comparte este código ${rivalWord}:</p>
@@ -2483,13 +2627,14 @@
     }
 
     function renderRoomReady(myName, opponentName, mode) {
-      const foundLine = mode === 'duo' ? '¡Equipo rival encontrado!' : '¡Oponente encontrado!';
-      const startLine = mode === 'duo' ? 'El enfrentamiento por equipos empieza automáticamente para ambos.' : 'La partida empieza automáticamente para ambos.';
+      const foundLine = mode === 'duo' ? '¡Equipo rival encontrado!' : mode === 'team' ? '¡Tu compañero se conectó!' : '¡Oponente encontrado!';
+      const startLine = mode === 'duo' ? 'El enfrentamiento por equipos empieza automáticamente para ambos.' : mode === 'team' ? 'La partida empieza automáticamente para los dos.' : 'La partida empieza automáticamente para ambos.';
+      const sep = mode === 'team' ? '🤝' : 'VS';
       roomModalBody.innerHTML = `
         <p class="room-status-line">${foundLine}</p>
         <div class="vs-row">
           <span class="vs-name">${escapeHtml(myName)}</span>
-          <span class="vs-sep">VS</span>
+          <span class="vs-sep">${sep}</span>
           <span class="vs-name">${escapeHtml(opponentName)}</span>
         </div>
         <div class="room-countdown" id="room-countdown-val">…</div>
@@ -2520,6 +2665,7 @@
           guestName: null, guestCountry: null, guestDevice: null,
           hostScore: 0, hostLives: START_LIVES, hostFinished: false, hostFinalScore: 0, hostFinalTime: 0,
           guestScore: 0, guestLives: START_LIVES, guestFinished: false, guestFinalScore: 0, guestFinalTime: 0,
+          guestLeft: false, guestRight: false, guestJumpSeq: 0,
           startAt: null
         });
 
@@ -2549,7 +2695,7 @@
           if (errEl) errEl.textContent = `Esta sala es modo ${roomModeLabel(data.mode)}. Vuelve y elige ese mismo modo para unirte.`;
           return;
         }
-        if (data.hostDevice && data.hostDevice !== DEVICE_TYPE) {
+        if (data.mode !== 'team' && data.hostDevice && data.hostDevice !== DEVICE_TYPE) {
           if (errEl) errEl.textContent = `Esta sala fue creada desde ${deviceLabel(data.hostDevice)}. Debes unirte desde el mismo tipo de dispositivo (estás en ${deviceLabel(DEVICE_TYPE)}).`;
           return;
         }
@@ -2579,7 +2725,7 @@
           if (errEl) errEl.textContent = `Esta sala es modo ${roomModeLabel(data.mode)}. Vuelve y elige ese mismo modo para unirte.`;
           return;
         }
-        if (data.hostDevice && data.hostDevice !== DEVICE_TYPE) {
+        if (data.mode !== 'team' && data.hostDevice && data.hostDevice !== DEVICE_TYPE) {
           if (errEl) errEl.textContent = `Esta sala fue creada desde ${deviceLabel(data.hostDevice)}. Debes unirte desde el mismo tipo de dispositivo.`;
           return;
         }
@@ -2627,7 +2773,7 @@
       if (data.status === 'ready' && !multiplayer) {
         const myName = role === 'host' ? data.hostName : data.guestName;
         const opponentName = role === 'host' ? data.guestName : data.hostName;
-        const mode = data.mode === 'duo' ? 'duo' : 'versus';
+        const mode = data.mode === 'duo' ? 'duo' : data.mode === 'team' ? 'team' : 'versus';
         renderRoomReady(myName, opponentName || '…', mode);
 
         if (!roomFlow.countdownTimer && data.startAt) {
@@ -2636,7 +2782,7 @@
             const el = document.getElementById('room-countdown-val');
             if (remainingMs <= 0) {
               if (el) el.textContent = '¡YA!';
-              beginMultiplayerRound(code, role, opponentName || 'Rival', mode);
+              beginMultiplayerRound(code, role, opponentName || (mode === 'team' ? 'Compañero' : 'Rival'), mode);
               return;
             }
             if (el) el.textContent = Math.ceil(remainingMs / 1000);
@@ -2649,6 +2795,11 @@
 
       // Ya en partida: sincroniza el panel del oponente en vivo
       if (multiplayer && (data.status === 'ready' || data.status === 'playing' || data.status === 'finished')) {
+        // Supervivencia en Equipo online: no hay "oponente" que comparar, hay un
+        // compañero cuyo input hay que aplicar (host) o cuyo marcador hay que
+        // mostrar (invitado). Se maneja aparte y se sale de esta función.
+        if (multiplayer.mode === 'team') { handleTeamSnapshot(role, data); return; }
+
         const oppScore = role === 'host' ? data.guestScore : data.hostScore;
         const oppLives = role === 'host' ? data.guestLives : data.hostLives;
         const oppFinished = role === 'host' ? data.guestFinished : data.hostFinished;
@@ -2670,20 +2821,75 @@
       }
     }
 
+    // --- Aplica cada snapshot de la sala durante una partida de Supervivencia
+    // en Equipo online: el host recibe el input remoto de su compañero y lo
+    // vuelca en `keys2` (así reutiliza toda la física ya existente del
+    // Jugador 2); el invitado solo actualiza su panel de control remoto con
+    // el marcador que transmite el host. ---
+    function handleTeamSnapshot(role, data) {
+      if (role === 'host') {
+        keys2.left = !!data.guestLeft;
+        keys2.right = !!data.guestRight;
+        const seq = data.guestJumpSeq || 0;
+        if (seq > (multiplayer.lastGuestJumpSeq || 0)) {
+          multiplayer.lastGuestJumpSeq = seq;
+          tryJump2();
+        }
+        return;
+      }
+      // role === 'guest'
+      const finished = !!data.hostFinished;
+      teamGuestScoreEl.textContent = finished ? (data.hostFinalScore || 0) : (data.hostScore || 0);
+      teamGuestLivesEl.textContent = Math.max(0, data.hostLives ?? START_LIVES);
+      if (finished && !multiplayer.resultShown) {
+        multiplayer.resultShown = true;
+        teamGuestStatusEl.textContent = '☠️ GAME OVER';
+        setTeamGuestControlsEnabled(false);
+      } else if (!finished) {
+        teamGuestStatusEl.textContent = '🟢 ¡Jugando!';
+      }
+    }
+
     function beginMultiplayerRound(code, role, opponentName, mode) {
       if (roomFlow.countdownTimer) { clearTimeout(roomFlow.countdownTimer); roomFlow.countdownTimer = null; }
-      multiplayer = { code, role, opponentName, mode, unsub: roomFlow.unsub, lastSync: 0, resultShown: false };
+      multiplayer = { code, role, opponentName, mode, unsub: roomFlow.unsub, lastSync: 0, resultShown: false, lastGuestJumpSeq: 0 };
       roomFlow = { code: null, role: null, unsub: null, countdownTimer: null }; // la sesión ahora vive en `multiplayer`
       window.firebaseReady.then(fb => {
         fb.updateDoc(fb.doc(fb.db, 'rooms', code), { status: 'playing' }).catch(() => {});
       });
+      roomModal.classList.add('hidden');
+
+      if (mode === 'team') {
+        if (role === 'guest') {
+          // El invitado no ejecuta su propia partida: solo controla al Jugador 2
+          // a distancia y ve el marcador. La partida real corre en la pantalla
+          // del host (una sola pantalla compartida).
+          teamMode = false;
+          hideP2Controls();
+          localGameView.style.display = 'none';
+          teamGuestPanel.style.display = '';
+          teamGuestHostNameEl.textContent = opponentName || 'tu compañero';
+          teamGuestScoreEl.textContent = '0';
+          teamGuestLivesEl.textContent = START_LIVES;
+          teamGuestStatusEl.textContent = '🟢 ¡Jugando!';
+          setTeamGuestControlsEnabled(true);
+          return;
+        }
+        // role === 'host': juega normalmente en Modo Equipo, pero el Jugador 2
+        // lo controla el compañero remoto (su input llega vía handleTeamSnapshot).
+        teamMode = true;
+        hideP2Controls();
+        updateControlsHint();
+        resetGame();
+        return;
+      }
+
       // En modo 2 vs 2, este dispositivo lo juegan los 2 integrantes del equipo
       // (comparten vidas y puntaje, igual que en Supervivencia en Equipo), y ese
       // puntaje combinado es el que se compara contra el del equipo rival.
       teamMode = mode === 'duo';
       if (teamMode) { showP2Controls(); } else { hideP2Controls(); }
       updateControlsHint();
-      roomModal.classList.add('hidden');
       mpHud.classList.add('show');
       mpOpponentName.textContent = mode === 'duo' ? `👥 ${opponentName}` : opponentName;
       mpOpponentScore.textContent = '0';
@@ -2747,6 +2953,11 @@
         multiplayer = null;
       }
       mpHud.classList.remove('show');
+      // Por si veníamos del panel de control remoto (invitado en Supervivencia
+      // en Equipo online), lo ocultamos y restauramos la vista normal del juego.
+      setTeamGuestControlsEnabled(false);
+      teamGuestPanel.style.display = 'none';
+      localGameView.style.display = '';
     }
 
     // El máximo de bolas simultáneas crece con el nivel (empieza escaso, termina intenso)
@@ -2807,6 +3018,8 @@
         hoverDur: 1000,
         beamPts: null,
         beamAlpha: 0,
+        beamPts2: null,
+        beamAlpha2: 0,
         volleyStart: null,
         volleyDur: 6000,
         // --- Deriva lateral durante la andanada (solo modo 'duo'): el OVNI no
@@ -2839,14 +3052,21 @@
     }
 
     function ufoFire(u) {
-      // --- En Modo Equipo, el OVNI dispara al jugador más cercano de los dos ---
-      let target = player;
+      // --- En Modo Equipo, el OVNI dispara un rayo a CADA jugador al mismo
+      // tiempo (dos rayos simultáneos desde el mismo platillo). Fuera de Modo
+      // Equipo, dispara un único rayo al único jugador. ---
       if (teamMode) {
-        const d1 = Math.abs(player.x - u.x);
-        const d2 = Math.abs(player2.x - u.x);
-        target = d2 < d1 ? player2 : player;
+        fireBeamAt(u, player, 'beamPts', 'beamAlpha');
+        fireBeamAt(u, player2, 'beamPts2', 'beamAlpha2');
+        return;
       }
+      fireBeamAt(u, player, 'beamPts', 'beamAlpha');
+    }
 
+    // --- Dispara un rayo de un OVNI hacia un jugador específico, guardando su
+    // trayectoria/opacidad en las propiedades indicadas (ptsKey/alphaKey), lo
+    // que permite que un mismo OVNI tenga dos rayos simultáneos en Modo Equipo. ---
+    function fireBeamAt(u, target, ptsKey, alphaKey) {
       const playerMoving = target === player ? (keys.left || keys.right) : (keys2.left || keys2.right);
       const missed = playerMoving && Math.random() < 0.10;
       let aimX = target.x;
@@ -2857,8 +3077,8 @@
         const dodgeDist = 55 + Math.random() * 45;
         aimX = Math.min(cssW - 30, Math.max(30, target.x + dodgeDir * dodgeDist));
       }
-      u.beamPts = createLightning(u.x, u.y + 7, aimX, aimY, 9, 20);
-      u.beamAlpha = 1;
+      u[ptsKey] = createLightning(u.x, u.y + 7, aimX, aimY, 9, 20);
+      u[alphaKey] = 1;
       sfxUfoBeam();
       triggerStormFlash();
       shake = Math.max(shake, 8);
@@ -2947,8 +3167,10 @@
       } else if (u.state === 'fire') {
         if (u.mode === 'duo') wanderUfo(u);
         u.beamAlpha -= 0.07;
+        u.beamAlpha2 -= 0.07;
         if (clock - u.stateStart > 260) {
           u.beamPts = null;
+          u.beamPts2 = null;
           // --- Modo dúo: repite disparos hasta cumplir 6 segundos de andanada ---
           if (u.mode === 'duo' && clock - u.volleyStart < u.volleyDur) {
             u.state = 'hover';
@@ -3012,7 +3234,7 @@
       }
       ctx.restore();
 
-      // Rayo eléctrico
+      // Rayo eléctrico (hacia el Jugador 1, o único jugador si no es Modo Equipo)
       if (u.beamPts && u.beamAlpha > 0) {
         ctx.save();
         ctx.globalCompositeOperation = 'lighter';
@@ -3023,6 +3245,21 @@
         u.beamPts.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
         ctx.stroke();
         ctx.strokeStyle = `rgba(240,249,255,${u.beamAlpha})`;
+        ctx.lineWidth = 2.6;
+        ctx.stroke();
+        ctx.restore();
+      }
+      // Segundo rayo simultáneo hacia el Jugador 2 (Modo Equipo: el OVNI ataca a ambos a la vez)
+      if (u.beamPts2 && u.beamAlpha2 > 0) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.strokeStyle = `rgba(96,165,250,${u.beamAlpha2 * 0.55})`;
+        ctx.lineWidth = 7;
+        ctx.lineJoin = 'round';
+        ctx.beginPath();
+        u.beamPts2.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
+        ctx.stroke();
+        ctx.strokeStyle = `rgba(240,249,255,${u.beamAlpha2})`;
         ctx.lineWidth = 2.6;
         ctx.stroke();
         ctx.restore();
