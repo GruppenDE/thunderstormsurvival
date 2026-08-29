@@ -3885,8 +3885,14 @@
       if (missed) {
         vibrateDevice([25]);
       } else {
-        vibrateDevice(target.invincible ? [30] : [60, 40, 60]);
-        if (!target.invincible) {
+        // Cada OVNI que acierta descuenta su propia vida, aunque el jugador
+        // esté en la breve invencibilidad de "recién golpeado" por otro OVNI
+        // u obstáculo (así, si aparecen 2+ OVNIs y varios aciertan casi al
+        // mismo tiempo, se pierde una vida por cada impacto). El único caso
+        // que sigue anulando el daño es el escudo de superpoder por subir
+        // de nivel (shieldActive).
+        vibrateDevice(target.shieldActive ? [30] : [60, 40, 60]);
+        if (!target.shieldActive) {
           loseLife();
         }
       }
