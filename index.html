@@ -3219,8 +3219,11 @@
     // ---------------------------------------------------------------------
     // 2) CONFIGURACIÓN
     // ---------------------------------------------------------------------
-    const SV_TICK_MS       = 260;  // envío de posición: ~3-4/s (bajado para no agotar la cuota gratis de Firestore)
-    const SV_INTERP_MS     = 320;  // ventana de interpolación en cliente (absorbe jitter)
+    const SV_TICK_MS       = 150;  // envío de posición: ~6-7/s (antes 260ms/~3.8 por seg: se sentía a destiempo)
+    const SV_INTERP_MS     = 150;  // ventana de interpolación ≈ intervalo de envío, para no ir siempre "atrasado"
+    const SV_EXTRAPOLATE_MS = 350; // tras alcanzar el último dato real, sigue moviendo al compañero con su
+                                    // última velocidad conocida hasta este límite, en vez de congelarlo en seco
+                                    // mientras llega el próximo paquete (disimula la latencia de red)
     const SV_HEARTBEAT_MS  = 8000;
     const SV_STALE_MS      = 20000; // sin heartbeat => compañero desconectado
     const SV_COUNTDOWN_MS  = 3500;
@@ -3706,6 +3709,22 @@
       const t = Math.min(1, (nowMs - c.since) / SV_INTERP_MS);
       c.curX = c.prevX + (c.nextX - c.prevX) * t;
       c.curY = c.prevY + (c.nextY - c.prevY) * t;
+
+      // Ya llegamos al último dato CONFIRMADO por red, pero el siguiente
+      // paquete puede tardar (intervalo de envío + latencia). Antes, aquí
+      // el compañero se quedaba inmóvil en seco hasta que llegaba el próximo
+      // dato, lo cual se ve como lag/teletransporte. Ahora, si seguía
+      // corriendo, lo dejamos avanzar con su última velocidad conocida por
+      // un margen corto — apenas llegue el próximo dato real, esta
+      // extrapolación se descarta y se retoma la interpolación normal desde
+      // la posición actual (sin saltos).
+      if (t >= 1 && c.action === 'run') {
+        const overMs = Math.min(nowMs - (c.since + SV_INTERP_MS), SV_EXTRAPOLATE_MS);
+        if (overMs > 0) {
+          const pxPerMs = player.speed / 16.7; // misma velocidad fija que usa el jugador local
+          c.curX = Math.max(0, Math.min(cssW, c.nextX + pxPerMs * c.facing * overMs));
+        }
+      }
     }
 
     function svStartHeartbeat() {
