@@ -2512,6 +2512,10 @@
       }
       const sx = tgCssW / f.w, sy = tgCssH / f.h;
 
+      if (teamGuestLiveBadge && teamGuestLiveBadge.textContent !== '● EN VIVO') {
+        teamGuestLiveBadge.textContent = '● EN VIVO';
+      }
+
       // Fondo nocturno simplificado
       const sky = ctx.createLinearGradient(0, 0, 0, tgCssH);
       sky.addColorStop(0, '#0b1a3a');
@@ -2530,7 +2534,7 @@
       // Obstáculos (orbes eléctricos que caen)
       if (f.obs) {
         f.obs.forEach(o => {
-          const ox = o.x * sx, oy = o.y * sy, r = Math.max(2.5, o.r * ((sx + sy) / 2));
+          const ox = o.x * sx, oy = o.y * sy, r = Math.max(4, o.r * ((sx + sy) / 2) * 1.5);
           const glow = ctx.createRadialGradient(ox, oy, 0, ox, oy, r * 2.2);
           glow.addColorStop(0, 'rgba(147,197,253,0.9)');
           glow.addColorStop(1, 'rgba(147,197,253,0)');
@@ -2552,21 +2556,27 @@
         });
       }
 
+      // Altura fija de los personajes en base al tamaño de MI propio canvas
+      // (no depende del tamaño de la pantalla del host), para que siempre se
+      // vean claros sin importar si mi compañero juega en un monitor grande
+      // o en un celular chico.
+      const figH = Math.max(20, Math.min(42, tgCssH * 0.16));
+
       // Jugador 1 (host)
-      if (f.p1) drawTeamGuestFigure(ctx, f.p1[0] * sx, f.p1[1] * sy, '#60a5fa', (sx + sy) / 2);
+      if (f.p1) drawTeamGuestFigure(ctx, f.p1[0] * sx, f.p1[1] * sy, '#60a5fa', figH);
       // Jugador 2 (yo, remoto): se dibuja con mi posición predicha localmente
       // (instantánea al pulsar los controles), no con la del host, que llega
       // con retraso de red y se usa solo para corregir la predicción.
-      if (teamGuestPred.initialized) drawTeamGuestFigure(ctx, teamGuestPred.x * sx, teamGuestPred.y * sy, '#fbbf24', (sx + sy) / 2);
-      else if (f.p2) drawTeamGuestFigure(ctx, f.p2[0] * sx, f.p2[1] * sy, '#fbbf24', (sx + sy) / 2);
+      if (teamGuestPred.initialized) drawTeamGuestFigure(ctx, teamGuestPred.x * sx, teamGuestPred.y * sy, '#fbbf24', figH);
+      else if (f.p2) drawTeamGuestFigure(ctx, f.p2[0] * sx, f.p2[1] * sy, '#fbbf24', figH);
     }
 
-    function drawTeamGuestFigure(ctx, x, y, color, scale) {
-      const h = 34 * scale, w = 13 * scale;
+    function drawTeamGuestFigure(ctx, x, y, color, h) {
+      const w = h * 0.4;
       ctx.save();
       ctx.fillStyle = color;
       ctx.shadowColor = color;
-      ctx.shadowBlur = 8 * scale;
+      ctx.shadowBlur = h * 0.24;
       const r = w / 2;
       ctx.beginPath();
       ctx.moveTo(x - r, y);
@@ -3274,7 +3284,7 @@
     function mpBroadcastFrame(time) {
       if (!multiplayer || multiplayer.mode !== 'team' || multiplayer.role !== 'host') return;
       if (gameState !== 'PLAYING') return;
-      if (time - (multiplayer.lastFrameSync || 0) < 120) return;
+      if (time - (multiplayer.lastFrameSync || 0) < 90) return;
       multiplayer.lastFrameSync = time;
 
       const round = (n) => Math.round(n);
