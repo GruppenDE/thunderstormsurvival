@@ -3468,6 +3468,8 @@
           nextX: cssW / 2, nextY: cssH - groundOffset(),
           curX: cssW / 2, curY: cssH - groundOffset(),
           facing: 1, action: 'idle', shieldActive: false, since: performance.now(),
+          shotSince: -99999, // instante (game clock) de su último disparo — separado del propio,
+                              // antes se reusaba por error la variable global del jugador local
           lastSeen: Date.now(), disconnected: false
         }
       };
@@ -3522,6 +3524,13 @@
           c.since = performance.now();
         }
         c.facing = partner.facing || 1;
+        // El disparo del compañero se veía "pegado" al tuyo porque la pose de
+        // disparo se dibujaba con el reloj de TU último disparo (variable
+        // global compartida por error). Ahora el compañero guarda su propio
+        // instante de disparo, separado del tuyo.
+        if (partner.action === 'shoot' && c.action !== 'shoot') {
+          c.shotSince = clock;
+        }
         c.action = partner.action || 'idle';
         // Escudo de inmunidad al subir de nivel: antes no viajaba por la red,
         // así que el compañero nunca se veía protegido aunque sí lo estuviera.
@@ -3774,6 +3783,12 @@
       if (!survival || survival.companion.disconnected) return;
       const c = survival.companion;
       const backup = player;
+      const backupShotAt = lastShotAt;
+      // drawPlayer() calcula la pose de disparo con la variable global
+      // `lastShotAt` — la sustituimos también por la del compañero mientras
+      // se dibuja, igual que ya se hace con `player`, para que su disparo
+      // se anime con SU propio último disparo y no con el tuyo.
+      lastShotAt = c.shotSince;
       player = {
         ...backup,
         x: c.curX, y: c.curY, facing: c.facing,
@@ -3794,6 +3809,7 @@
       ctx.filter = 'none';
       ctx.restore();
       player = backup;
+      lastShotAt = backupShotAt;
     }
 
     // Punto de entrada de dibujo de la escena de Supervivencia. Sustituye,
