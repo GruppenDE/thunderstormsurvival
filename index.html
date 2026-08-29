@@ -2554,8 +2554,11 @@
 
       // Jugador 1 (host)
       if (f.p1) drawTeamGuestFigure(ctx, f.p1[0] * sx, f.p1[1] * sy, '#60a5fa', (sx + sy) / 2);
-      // Jugador 2 (yo, remoto)
-      if (f.p2) drawTeamGuestFigure(ctx, f.p2[0] * sx, f.p2[1] * sy, '#fbbf24', (sx + sy) / 2);
+      // Jugador 2 (yo, remoto): se dibuja con mi posición predicha localmente
+      // (instantánea al pulsar los controles), no con la del host, que llega
+      // con retraso de red y se usa solo para corregir la predicción.
+      if (teamGuestPred.initialized) drawTeamGuestFigure(ctx, teamGuestPred.x * sx, teamGuestPred.y * sy, '#fbbf24', (sx + sy) / 2);
+      else if (f.p2) drawTeamGuestFigure(ctx, f.p2[0] * sx, f.p2[1] * sy, '#fbbf24', (sx + sy) / 2);
     }
 
     function drawTeamGuestFigure(ctx, x, y, color, scale) {
@@ -2577,10 +2580,82 @@
       ctx.restore();
     }
 
-    // Bucle de dibujo local del invitado: redibuja a ~30fps usando el último
+    // Bucle de dibujo local del invitado: redibuja a ~60fps usando el último
     // frame recibido (no espera a cada snapshot para sentirse fluido).
+    // =====================================================================
+    // --- PREDICCIÓN LOCAL DEL INVITADO (arregla el lag de controles) ---
+    // Antes, el movimiento del invitado dependía de un viaje completo por
+    // Firestore (botón → host aplica física → host reenvía frame → invitado
+    // dibuja), lo que se sentía muy lento e impreciso. Ahora el invitado
+    // simula localmente SU PROPIO personaje con la misma física exacta que
+    // usa el host para Jugador 2 (misma velocidad, gravedad y fuerza de
+    // salto), reaccionando al instante a sus propias teclas/botones. La
+    // posición real que calcula el host (autoritativa, la que de verdad
+    // decide colisiones y puntaje) llega igual por el `frame`, y se usa
+    // para corregir suavemente la predicción local (o resincronizar de
+    // golpe si la diferencia es demasiado grande), evitando que se note el
+    // salto pero manteniendo el control fluido. ---
+    // =====================================================================
+    const P2_PRED_SPEED = 6.5;   // debe coincidir con player2.speed en el host
+    const P2_PRED_JUMP = -8.7;   // debe coincidir con player2.jumpForce en el host
+    const P2_PRED_GRAVITY = 0.58; // debe coincidir con player2.gravity en el host
+    const P2_PRED_WIDTH = 16;    // debe coincidir con player2.width en el host
+    let teamGuestPred = { x: 0, y: 0, vx: 0, vy: 0, grounded: true, initialized: false, serverX: null, serverY: null };
+
+    function resetTeamGuestPrediction() {
+      teamGuestPred = { x: 0, y: 0, vx: 0, vy: 0, grounded: true, initialized: false, serverX: null, serverY: null };
+    }
+
+    function stepTeamGuestPrediction() {
+      const f = teamGuestLatestFrame;
+      if (!f || !f.w || !f.h) return;
+      const p = teamGuestPred;
+      const groundLevel = f.h - f.gy;
+
+      if (!p.initialized) {
+        p.x = (f.p2 ? f.p2[0] : f.w / 2);
+        p.y = (f.p2 ? f.p2[1] : groundLevel);
+        p.vx = 0; p.vy = 0; p.grounded = true; p.initialized = true;
+      }
+
+      // Física local (idéntica a la del host para Jugador 2)
+      if (teamGuestInput.left) p.vx = -P2_PRED_SPEED;
+      else if (teamGuestInput.right) p.vx = P2_PRED_SPEED;
+      else p.vx = 0;
+
+      p.x += p.vx;
+      p.vy += P2_PRED_GRAVITY;
+      p.y += p.vy;
+
+      if (p.x < P2_PRED_WIDTH / 2) p.x = P2_PRED_WIDTH / 2;
+      if (p.x > f.w - P2_PRED_WIDTH / 2) p.x = f.w - P2_PRED_WIDTH / 2;
+
+      if (p.y > groundLevel) { p.y = groundLevel; p.vy = 0; p.grounded = true; }
+      else { p.grounded = false; }
+
+      // Reconciliación con la posición autoritativa del host: corrección
+      // suave si la diferencia es pequeña, resincronización inmediata si es
+      // grande (por ejemplo tras una pausa larga de red).
+      if (f.p2) {
+        p.serverX = f.p2[0]; p.serverY = f.p2[1];
+        const dx = p.serverX - p.x, dy = p.serverY - p.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist > 140) { p.x = p.serverX; p.y = p.serverY; p.vy = 0; }
+        else { p.x += dx * 0.08; p.y += dy * 0.08; }
+      }
+    }
+
+    // Envía un salto: incrementa un contador en Firestore para que el host
+    // lo detecte, Y ADEMÁS salta de inmediato en la predicción local.
+    function teamGuestLocalJump() {
+      if (teamGuestPred.grounded) {
+        teamGuestPred.vy = P2_PRED_JUMP;
+        teamGuestPred.grounded = false;
+      }
+    }
     function teamGuestDrawLoop() {
       if (!teamGuestLoopRunning) return;
+      stepTeamGuestPrediction();
       drawTeamGuestFrame();
       requestAnimationFrame(teamGuestDrawLoop);
     }
@@ -2588,6 +2663,7 @@
       if (teamGuestLoopRunning) return;
       teamGuestLoopRunning = true;
       teamGuestLatestFrame = null;
+      resetTeamGuestPrediction();
       teamGuestViewStartedAt = performance.now();
       resizeTeamGuestCanvas();
       requestAnimationFrame(teamGuestDrawLoop);
@@ -2595,6 +2671,7 @@
     function stopTeamGuestLiveView() {
       teamGuestLoopRunning = false;
       teamGuestLatestFrame = null;
+      resetTeamGuestPrediction();
     }
 
     // Estado local del input remoto del invitado, antes de enviarlo a Firestore.
@@ -2628,8 +2705,10 @@
 
     // Envía un salto: incrementa un contador en Firestore (`increment`) para que
     // el host detecte el "flanco" de un nuevo salto en cuanto llegue el snapshot.
+    // También salta de inmediato en la predicción local (ver más arriba).
     function teamGuestJump() {
       if (!teamGuestControlsEnabled || !multiplayer || multiplayer.mode !== 'team' || multiplayer.role !== 'guest') return;
+      teamGuestLocalJump();
       window.firebaseReady.then(fb => {
         fb.updateDoc(fb.doc(fb.db, 'rooms', multiplayer.code), {
           guestJumpSeq: fb.increment(1)
