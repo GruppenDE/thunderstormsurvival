@@ -1909,11 +1909,11 @@
     let lightningBolts = [];
     let groundImpacts = [];
 
-    // --- Corazones: en el nivel 40, al derribar un OVNI hay 10% de probabilidad
+    // --- Corazones: desde el nivel 30 en adelante, al derribar un OVNI hay 50% de probabilidad
     // de que suelte un corazón que cae y el jugador puede recoger para ganar vida. ---
     let heartPickups = [];
-    const HEART_DROP_LEVEL = 40;
-    const HEART_DROP_CHANCE = 0.10;
+    const HEART_DROP_LEVEL = 30;
+    const HEART_DROP_CHANCE = 0.50;
 
     // --- OVNIs: array porque en niveles múltiplo de 10 aparecen dos a la vez.
     // Cada uno entra volando, sobrevuela y dispara rayos eléctricos hacia el
@@ -3923,8 +3923,8 @@
       sfxUfoHit();
       score += 15;
       scoreVal.textContent = score;
-      // --- En el nivel 40, 10% de probabilidad de soltar un corazón al derribar el OVNI ---
-      if (level === HEART_DROP_LEVEL && Math.random() < HEART_DROP_CHANCE) {
+      // --- Desde el nivel 30 en adelante, 50% de probabilidad de soltar un corazón al derribar el OVNI ---
+      if (level >= HEART_DROP_LEVEL && Math.random() < HEART_DROP_CHANCE) {
         spawnHeartPickup(u.x, u.y);
       }
       ufos.splice(index, 1);
@@ -4417,7 +4417,7 @@
       ctx.restore();
     }
 
-    // --- Dibuja los corazones cayendo (drop especial del nivel 40) con un
+    // --- Dibuja los corazones cayendo (drop especial desde el nivel 30) con un
     // leve rebote de aparición y un suave latido mientras caen. ---
     function drawHeartPickups(time) {
       heartPickups.forEach(h => {
