@@ -16,7 +16,8 @@
   import { getAnalytics, isSupported as analyticsIsSupported } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-analytics.js";
   import {
     getFirestore, collection, addDoc, getDocs, query, orderBy, limit, serverTimestamp,
-    doc, setDoc, getDoc, onSnapshot, updateDoc, deleteDoc, increment
+    doc, setDoc, getDoc, onSnapshot, updateDoc, deleteDoc, increment,
+    runTransaction, where, deleteField
   } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js";
   import {
     getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut,
@@ -47,6 +48,7 @@
   window.__resolveFirebaseReady({
     db, collection, addDoc, getDocs, query, orderBy, limit, serverTimestamp,
     doc, setDoc, getDoc, onSnapshot, updateDoc, deleteDoc, increment,
+    runTransaction, where, deleteField,
     auth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut
   });
 </script>
@@ -615,12 +617,6 @@
   }
   .room-btn:disabled{ opacity:0.5; cursor:not-allowed; transform:none; box-shadow:none; }
 
-  /* ================= Panel de Jugador 2 remoto (Supervivencia en Equipo online) ================= */
-  .team-guest-card{
-    background: linear-gradient(to bottom, var(--panel), var(--void));
-    border: 1px solid rgba(245,158,11,0.35);
-    box-shadow: 0 0 30px rgba(245,158,11,0.12), inset 0 0 40px rgba(245,158,11,0.03);
-  }
   .room-input{
     width:100%; background: rgba(15,23,42,0.7); border: 1px solid rgba(59,130,246,0.35);
     color:#f8fafc; font-size:18px; letter-spacing:0.35em; text-align:center; text-transform:uppercase;
@@ -682,6 +678,29 @@
   #mp-mode-btn{
     box-shadow: 0 0 18px rgba(245,158,11,0.35);
   }
+
+  /* Panel de rivales en Partida Rápida (matchmaking automático, 2-4 jugadores) */
+  #qm-hud{
+    display:none;
+    flex-direction:column;
+    gap:4px;
+    background: rgba(15,23,42,0.6);
+    border: 1px solid rgba(245,158,11,0.3);
+    border-radius: 8px;
+    padding: 6px 10px;
+    margin-bottom: 8px;
+    font-family: ui-monospace, monospace;
+    font-size: 10.5px;
+  }
+  #qm-hud.show{ display:flex; }
+  .qm-row{ display:flex; align-items:center; gap:8px; color:#e2e8f0; }
+  .qm-avatar{
+    display:inline-block; width:16px; text-align:center;
+    transition: transform 0.09s linear;
+  }
+  .qm-name{ color:#fbbf24; font-weight:700; max-width:80px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
+  .qm-stat{ color:#e2e8f0; }
+  .qm-status{ color:#64748b; min-width:14px; text-align:center; }
 
   @media (prefers-reduced-motion: reduce){
     /* El OVNI de carga ya maneja su propia regla de reduced-motion arriba */
@@ -876,7 +895,7 @@
         <div id="lives-display" class="flex items-center gap-1"></div>
       </div>
 
-      <!-- Panel del oponente (solo visible en Modo 2 Jugadores) -->
+      <!-- Panel del oponente (solo visible en Modo 2 Jugadores por código) -->
       <div id="mp-hud">
         <span class="mp-name" id="mp-opponent-name">Oponente</span>
         <div class="mp-stats">
@@ -884,6 +903,11 @@
           <span>❤️ <span id="mp-opponent-lives">3</span></span>
           <span id="mp-opponent-status"></span>
         </div>
+      </div>
+
+      <!-- Panel de rivales (solo visible en Partida Rápida / matchmaking automático) -->
+      <div id="qm-hud">
+        <div id="qm-opponents"></div>
       </div>
 
       <!-- Sub-barra informativa -->
@@ -948,46 +972,7 @@
       <button id="btn-shoot" class="touch-btn locked w-full bg-red-900/60 border border-red-700/70 py-2.5 rounded-lg text-xs font-bold text-red-200">🔫 DISPARO (Nivel 10+)</button>
     </div>
 
-    <!-- Controles del Jugador 2 (solo visibles en Modo Supervivencia en Equipo) -->
-    <div id="p2-controls" class="w-full mt-4" style="display:none;">
-      <p class="text-center text-[10px] font-mono text-amber-400/80 mb-1.5 tracking-wider">JUGADOR 2 &nbsp;(también: ←/→/↑)</p>
-      <div class="flex justify-between w-full gap-2">
-        <button id="p2-btn-left" class="touch-btn flex-1 bg-amber-900/40 border border-amber-700/60 py-3 rounded-lg text-xs font-bold text-amber-200">◀ IZQUIERDA</button>
-        <button id="p2-btn-jump" class="touch-btn flex-1 bg-amber-900/40 border border-amber-700/60 py-3 rounded-lg text-xs font-bold text-amber-200">▲ SALTO</button>
-        <button id="p2-btn-right" class="touch-btn flex-1 bg-amber-900/40 border border-amber-700/60 py-3 rounded-lg text-xs font-bold text-amber-200">DERECHA ▶</button>
-      </div>
-    </div>
     </div><!-- /local-game-view -->
-
-    <!-- Panel de control remoto del Jugador 2: se muestra en el dispositivo del
-         invitado cuando se une a una sala de Supervivencia en Equipo online.
-         La partida se ejecuta y se ve en la pantalla de quien creó la sala;
-         este dispositivo solo envía sus movimientos e informa el marcador. -->
-    <div id="team-guest-panel" class="team-guest-card w-full rounded-xl p-4 relative" style="display:none;">
-      <h2 class="text-sm font-bold text-amber-400 font-mono tracking-wider text-center mb-1">🎮 JUGADOR 2 REMOTO</h2>
-      <p class="text-[11px] text-slate-300 text-center mb-3">Estás jugando en la pantalla de <b id="team-guest-host-name">tu compañero</b>. Muévete con los botones o con ←/→/↑.</p>
-
-      <!-- Vista en vivo (simplificada) de la partida del anfitrión, reconstruida
-           a partir de los "frames" de posición que transmite por Firestore. -->
-      <div class="canvas-frame relative w-full rounded-lg overflow-hidden grid-bg border border-amber-500/20 bg-slate-950/50 mb-3">
-        <canvas id="teamGuestCanvas" class="absolute inset-0 w-full h-full"></canvas>
-        <video id="teamGuestVideo" class="absolute inset-0 w-full h-full object-contain bg-black" style="display:none;" autoplay playsinline muted></video>
-        <div id="team-guest-live-badge" class="absolute top-1.5 right-2 text-[9px] font-mono tracking-wider text-amber-300/80 bg-slate-950/60 border border-amber-500/30 rounded px-1.5 py-0.5">● CONECTANDO…</div>
-      </div>
-
-      <div class="flex justify-center items-center gap-4 mb-4 hud-chip border border-amber-500/30 rounded-lg px-3 py-2 font-mono text-xs">
-        <span>⭐ <span id="team-guest-score">0</span></span>
-        <span>❤️ <span id="team-guest-lives">3</span></span>
-        <span id="team-guest-status" class="text-amber-300"></span>
-      </div>
-
-      <div class="flex justify-between w-full gap-2 mb-2">
-        <button id="team-guest-btn-left" class="touch-btn flex-1 bg-amber-900/40 border border-amber-700/60 py-4 rounded-lg text-sm font-bold text-amber-200">◀ IZQUIERDA</button>
-        <button id="team-guest-btn-jump" class="touch-btn flex-1 bg-amber-900/40 border border-amber-700/60 py-4 rounded-lg text-sm font-bold text-amber-200">▲ SALTO</button>
-        <button id="team-guest-btn-right" class="touch-btn flex-1 bg-amber-900/40 border border-amber-700/60 py-4 rounded-lg text-sm font-bold text-amber-200">DERECHA ▶</button>
-      </div>
-      <button id="team-guest-leave-btn" class="room-btn secondary w-full mt-2">Salir de la sala</button>
-    </div>
   </main>
 
   <!-- Footer general -->
@@ -1276,10 +1261,10 @@
       logoutBtn.disabled = true;
       try {
         if (typeof teardownRoomFlow === 'function') teardownRoomFlow();
+        if (typeof teardownQuickFlow === 'function') teardownQuickFlow();
         if (typeof leaveMultiplayer === 'function') leaveMultiplayer();
+        if (typeof leaveQuickMatch === 'function') leaveQuickMatch();
         if (roomModal && !roomModal.classList.contains('hidden')) roomModal.classList.add('hidden');
-        teamMode = false;
-        if (typeof hideP2Controls === 'function') hideP2Controls();
         if (typeof updateControlsHint === 'function') updateControlsHint();
 
         const fb = await window.firebaseReady;
@@ -1892,32 +1877,6 @@
       shieldActive: false
     };
 
-    // --- MODO SUPERVIVENCIA EN EQUIPO: dos jugadores comparten esta misma
-    // pantalla/dispositivo y las mismas vidas y puntaje (ya son variables
-    // globales únicas). player2 es un segundo personaje independiente con
-    // su propio movimiento/salto, dibujado con un color distinto. ---
-    let teamMode = false;
-    let player2 = {
-      x: 0, y: 0,
-      radius: 10,
-      height: 38,
-      width: 16,
-      vx: 0, vy: 0,
-      speed: 6.5,
-      jumpForce: -8.7,
-      gravity: 0.58,
-      grounded: false,
-      facing: 1,
-      walkPhase: 0,
-      squash: 1,
-      corePulse: 0,
-      trail: [],
-      invincible: false,
-      invincibleUntil: 0,
-      shieldActive: false
-    };
-    let keys2 = { left: false, right: false };
-
     let obstacles = [];
     let particles = [];
     let lightningBolts = [];
@@ -1957,18 +1916,6 @@
       }
     }
 
-    function tryJump2() {
-      if (gameState === 'PLAYING' && teamMode && player2.grounded) {
-        player2.vy = player2.jumpForce;
-        player2.grounded = false;
-        player2.squash = 0.8;
-        sfxJump();
-        for (let i = 0; i < 4; i++) {
-          particles.push({ x: player2.x, y: player2.y, vx: (Math.random() - 0.5) * 1.5, vy: Math.random() * 0.5, life: 0.8, color: '#fcd34d' });
-        }
-      }
-    }
-
     // --- Disparo del jugador: solo funciona a partir del nivel de desbloqueo,
     // dispara una bala de energía hacia arriba para derribar OVNIS. ---
     function tryShoot() {
@@ -1989,29 +1936,12 @@
     }
 
     window.addEventListener('keydown', (e) => {
-      if (teamMode) {
-        // En modo equipo: Jugador 1 = A/D + W/Espacio. Jugador 2 = flechas.
-        if (e.code === 'KeyA') keys.left = true;
-        if (e.code === 'KeyD') keys.right = true;
-        if (e.code === 'Space' || e.code === 'KeyW') { e.preventDefault(); tryJump(); }
-        if (e.code === 'ArrowLeft') { e.preventDefault(); keys2.left = true; }
-        if (e.code === 'ArrowRight') { e.preventDefault(); keys2.right = true; }
-        if (e.code === 'ArrowUp') { e.preventDefault(); tryJump2(); }
-        return;
-      }
       if (e.code === 'ArrowLeft' || e.code === 'KeyA') keys.left = true;
       if (e.code === 'ArrowRight' || e.code === 'KeyD') keys.right = true;
       if (e.code === 'Space' || e.code === 'KeyW') { e.preventDefault(); tryJump(); }
       if (e.code === 'ArrowUp' || e.code === 'KeyF' || e.code === 'KeyJ' || e.code === 'ControlLeft') { e.preventDefault(); tryShoot(); }
     });
     window.addEventListener('keyup', (e) => {
-      if (teamMode) {
-        if (e.code === 'KeyA') keys.left = false;
-        if (e.code === 'KeyD') keys.right = false;
-        if (e.code === 'ArrowLeft') keys2.left = false;
-        if (e.code === 'ArrowRight') keys2.right = false;
-        return;
-      }
       if (e.code === 'ArrowLeft' || e.code === 'KeyA') keys.left = false;
       if (e.code === 'ArrowRight' || e.code === 'KeyD') keys.right = false;
     });
@@ -2028,29 +1958,11 @@
     bindHold(document.getElementById('btn-jump'), () => tryJump());
     bindHold(btnShoot, () => tryShoot());
 
-    const p2Controls = document.getElementById('p2-controls');
-    bindHold(document.getElementById('p2-btn-left'), () => keys2.left = true, () => keys2.left = false);
-    bindHold(document.getElementById('p2-btn-right'), () => keys2.right = true, () => keys2.right = false);
-    bindHold(document.getElementById('p2-btn-jump'), () => tryJump2());
-
-    function showP2Controls() { p2Controls.style.display = ''; }
-    function hideP2Controls() { p2Controls.style.display = 'none'; }
-
     const controlsHintDesktop = document.getElementById('controls-hint-desktop');
     const controlsHintMobile = document.getElementById('controls-hint-mobile');
     function updateControlsHint() {
-      if (teamMode) {
-        if (multiplayer && multiplayer.mode === 'team' && multiplayer.role === 'host') {
-          controlsHintDesktop.textContent = `P1 (TÚ): A/D MOVE · W/ESPACIO SALTO   —   P2: ${multiplayer.opponentName || 'compañero'} (remoto)`;
-          controlsHintMobile.textContent = 'TÚ ERES J1 · TU COMPAÑERO JUEGA REMOTO';
-        } else {
-          controlsHintDesktop.textContent = 'P1: A/D MOVE · W/ESPACIO SALTO   —   P2: ←/→ MOVE · ↑ SALTO';
-          controlsHintMobile.textContent = 'EQUIPO: USA LOS BOTONES ▼';
-        }
-      } else {
-        controlsHintDesktop.textContent = 'A/D MOVE   W/SPACE JUMP   ↑/F DISPARO (Nivel 10+)';
-        controlsHintMobile.textContent = 'TOCA LOS BOTONES ▼';
-      }
+      controlsHintDesktop.textContent = 'A/D MOVE   W/SPACE JUMP   ↑/F DISPARO (Nivel 10+)';
+      controlsHintMobile.textContent = 'TOCA LOS BOTONES ▼';
     }
 
     function pauseGame() {
@@ -2179,15 +2091,17 @@
         statusMsg.textContent = 'GAME OVER';
         finalScoreVal.textContent = score;
         const finalScoreLabelEl = document.querySelector('.final-score-label');
-        if (finalScoreLabelEl) finalScoreLabelEl.textContent = teamMode ? 'PUNTAJE FINAL DEL EQUIPO' : 'PUNTAJE FINAL';
+        if (finalScoreLabelEl) finalScoreLabelEl.textContent = 'PUNTAJE FINAL';
         finalScoreWrap.classList.add('show');
         saveScoreRecord(score, elapsedTime);
         if (multiplayer) mpReportFinished();
+        if (quickMatch) qmReportFinished();
         sfxGameOver();
         setTimeout(() => startMusic('gameover'), 450);
       } else {
         statusMsg.textContent = '¡IMPACTO! VIDAS: ' + lives;
         if (multiplayer) mpSyncNow();
+        if (quickMatch) { quickMatch.lastBroadcast = 0; mpBroadcastFrame(clock); }
       }
     }
 
@@ -2275,19 +2189,11 @@
       ensureAudio();
       stopMusic();
       resizeCanvas();
-      player.x = teamMode ? cssW / 2 - 40 : cssW / 2;
+      player.x = cssW / 2;
       player.y = cssH - groundOffset();
       player.vx = 0; player.vy = 0;
       player.walkPhase = 0; player.squash = 1; player.landing = false; player.trail = [];
       player.invincible = false; player.invincibleUntil = 0; player.shieldActive = false;
-      if (teamMode) {
-        player2.x = cssW / 2 + 40;
-        player2.y = cssH - groundOffset();
-        player2.vx = 0; player2.vy = 0;
-        player2.walkPhase = 0; player2.squash = 1; player2.landing = false; player2.trail = [];
-        player2.invincible = false; player2.invincibleUntil = 0; player2.shieldActive = false;
-        keys2.left = false; keys2.right = false;
-      }
       obstacles = []; particles = []; lightningBolts = []; groundImpacts = [];
       ufos = []; heartPickups = [];
       bullets = []; lastShotAt = -99999; weaponUnlocked = false;
@@ -2309,8 +2215,7 @@
     }
     startBtn.addEventListener('click', () => {
       leaveMultiplayer();
-      teamMode = false;
-      hideP2Controls();
+      leaveQuickMatch();
       updateControlsHint();
       resetGame();
     });
@@ -2335,561 +2240,6 @@
     const mpOpponentLives = document.getElementById('mp-opponent-lives');
     const mpOpponentStatus = document.getElementById('mp-opponent-status');
     const mpResultEl = document.getElementById('mp-result');
-
-    // --- Panel de control remoto del invitado en Supervivencia en Equipo online ---
-    const localGameView = document.getElementById('local-game-view');
-    const teamGuestPanel = document.getElementById('team-guest-panel');
-    const teamGuestHostNameEl = document.getElementById('team-guest-host-name');
-    const teamGuestScoreEl = document.getElementById('team-guest-score');
-    const teamGuestLivesEl = document.getElementById('team-guest-lives');
-    const teamGuestStatusEl = document.getElementById('team-guest-status');
-    const teamGuestBtnLeft = document.getElementById('team-guest-btn-left');
-    const teamGuestBtnJump = document.getElementById('team-guest-btn-jump');
-    const teamGuestBtnRight = document.getElementById('team-guest-btn-right');
-    const teamGuestLeaveBtn = document.getElementById('team-guest-leave-btn');
-
-    // =====================================================================
-    // --- VISTA EN VIVO DEL INVITADO (Supervivencia en Equipo online) ---
-    // El host transmite por Firestore un "frame" ligero (posiciones de los
-    // jugadores, obstáculos y OVNIs, redondeadas a enteros) varias veces por
-    // segundo. El invitado NO simula el juego: solo redibuja en su propio
-    // canvas la última foto recibida, escalada a su propio tamaño de
-    // pantalla. Es una reconstrucción simplificada (no un video real), pero
-    // le permite ver la partida en tiempo real en vez de solo un marcador. ---
-    // =====================================================================
-    const teamGuestCanvas = document.getElementById('teamGuestCanvas');
-    const teamGuestCtx = teamGuestCanvas.getContext('2d');
-    const teamGuestVideo = document.getElementById('teamGuestVideo');
-    const teamGuestLiveBadge = document.getElementById('team-guest-live-badge');
-    let tgCssW = 0, tgCssH = 0;
-    let teamGuestLatestFrame = null;
-    let teamGuestLoopRunning = false;
-    let teamGuestViewStartedAt = 0;
-
-    // =====================================================================
-    // --- TRANSMISIÓN REAL DE PANTALLA (WebRTC) ---
-    // Además de la vista reconstruida (arriba), el host intenta transmitir
-    // literalmente su <canvas> del juego al invitado vía WebRTC, usando la
-    // sala de Firestore solo como "buzón" de señalización (SDP + candidatos
-    // ICE), sin servidor propio. Si la conexión no se logra (redes muy
-    // restrictivas, sin TURN configurado, navegador sin soporte), el
-    // invitado simplemente se queda viendo la vista reconstruida de arriba
-    // como respaldo automático. ---
-    // =====================================================================
-    const RTC_CONFIG = {
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' }
-      ]
-    };
-    let webrtcPC = null;
-    let webrtcCandidatesUnsub = null;
-
-    function teardownWebRTC() {
-      if (webrtcPC) { try { webrtcPC.close(); } catch (e) {} webrtcPC = null; }
-      if (webrtcCandidatesUnsub) { webrtcCandidatesUnsub(); webrtcCandidatesUnsub = null; }
-      if (teamGuestVideo) { try { teamGuestVideo.srcObject = null; } catch (e) {} teamGuestVideo.style.display = 'none'; }
-      if (teamGuestCanvas) teamGuestCanvas.style.display = '';
-      if (teamGuestLiveBadge) teamGuestLiveBadge.textContent = '● CONECTANDO…';
-    }
-
-    // --- HOST: comparte literalmente su <canvas> del juego como video. ---
-    async function startHostScreenShare() {
-      if (!multiplayer || multiplayer.mode !== 'team' || multiplayer.role !== 'host') return;
-      if (typeof canvas.captureStream !== 'function') {
-        console.warn('Este navegador no soporta canvas.captureStream(); el invitado usará la vista reconstruida.');
-        return;
-      }
-      try {
-        webrtcPC = new RTCPeerConnection(RTC_CONFIG);
-        const stream = canvas.captureStream(15); // 15 fps: suficiente y ahorra datos/batería
-        stream.getTracks().forEach(t => webrtcPC.addTrack(t, stream));
-
-        webrtcPC.onicecandidate = (e) => {
-          if (!e.candidate || !multiplayer) return;
-          window.firebaseReady.then(fb => {
-            fb.addDoc(fb.collection(fb.db, 'rooms', multiplayer.code, 'hostCandidates'), e.candidate.toJSON()).catch((err) => console.error('[webrtc host] Error guardando candidato ICE:', err));
-          });
-        };
-
-        const offer = await webrtcPC.createOffer();
-        await webrtcPC.setLocalDescription(offer);
-        window.firebaseReady.then(fb => {
-          fb.updateDoc(fb.doc(fb.db, 'rooms', multiplayer.code), {
-            webrtcOffer: { type: offer.type, sdp: offer.sdp }
-          }).catch((err) => console.error('[webrtc host] Error guardando la oferta:', err));
-        });
-
-        window.firebaseReady.then(fb => {
-          if (!multiplayer) return;
-          const ref = fb.collection(fb.db, 'rooms', multiplayer.code, 'guestCandidates');
-          webrtcCandidatesUnsub = fb.onSnapshot(ref, (snap) => {
-            snap.docChanges().forEach(change => {
-              if (change.type === 'added' && webrtcPC) {
-                webrtcPC.addIceCandidate(new RTCIceCandidate(change.doc.data())).catch(() => {});
-              }
-            });
-          });
-        });
-      } catch (e) {
-        console.error('No se pudo iniciar la transmisión de pantalla:', e);
-      }
-    }
-
-    // --- INVITADO: recibe la oferta del host y responde. ---
-    async function startGuestWebRTC(offer) {
-      if (webrtcPC || !multiplayer) return;
-      try {
-        webrtcPC = new RTCPeerConnection(RTC_CONFIG);
-        webrtcPC.ontrack = (e) => {
-          teamGuestVideo.srcObject = e.streams[0];
-          teamGuestVideo.style.display = '';
-          teamGuestCanvas.style.display = 'none';
-          if (teamGuestLiveBadge) teamGuestLiveBadge.textContent = '● EN VIVO';
-        };
-        webrtcPC.onicecandidate = (e) => {
-          if (!e.candidate || !multiplayer) return;
-          window.firebaseReady.then(fb => {
-            fb.addDoc(fb.collection(fb.db, 'rooms', multiplayer.code, 'guestCandidates'), e.candidate.toJSON()).catch((err) => console.error('[webrtc guest] Error guardando candidato ICE:', err));
-          });
-        };
-
-        await webrtcPC.setRemoteDescription(new RTCSessionDescription(offer));
-        const answer = await webrtcPC.createAnswer();
-        await webrtcPC.setLocalDescription(answer);
-        window.firebaseReady.then(fb => {
-          fb.updateDoc(fb.doc(fb.db, 'rooms', multiplayer.code), {
-            webrtcAnswer: { type: answer.type, sdp: answer.sdp }
-          }).catch((err) => console.error('[webrtc guest] Error guardando la respuesta:', err));
-        });
-
-        window.firebaseReady.then(fb => {
-          if (!multiplayer) return;
-          const ref = fb.collection(fb.db, 'rooms', multiplayer.code, 'hostCandidates');
-          webrtcCandidatesUnsub = fb.onSnapshot(ref, (snap) => {
-            snap.docChanges().forEach(change => {
-              if (change.type === 'added' && webrtcPC) {
-                webrtcPC.addIceCandidate(new RTCIceCandidate(change.doc.data())).catch(() => {});
-              }
-            });
-          });
-        });
-      } catch (e) {
-        console.error('No se pudo conectar el video en vivo, se usará la vista reconstruida:', e);
-      }
-    }
-
-    function resizeTeamGuestCanvas() {
-      const rect = teamGuestCanvas.parentElement.getBoundingClientRect();
-      const DPR = Math.min(window.devicePixelRatio || 1, 2);
-      tgCssW = rect.width; tgCssH = rect.height;
-      teamGuestCanvas.width = Math.round(tgCssW * DPR);
-      teamGuestCanvas.height = Math.round(tgCssH * DPR);
-      teamGuestCanvas.style.width = tgCssW + 'px';
-      teamGuestCanvas.style.height = tgCssH + 'px';
-      teamGuestCtx.setTransform(DPR, 0, 0, DPR, 0, 0);
-      generateTeamGuestBackground();
-    }
-    window.addEventListener('resize', () => { if (teamGuestPanel.style.display !== 'none') resizeTeamGuestCanvas(); });
-
-    // --- Ambientación de fondo del invitado (estrellas, luna, montañas) ---
-    // Puramente decorativa y generada LOCALMENTE (no depende de datos del
-    // host), para que la vista del invitado se sienta parte del mismo mundo
-    // nocturno que ve el Jugador 1, con el mismo estilo visual del juego.
-    let teamGuestStars = [];
-    let teamGuestMoon = null;
-    let teamGuestMountains = [];
-
-    function generateTeamGuestBackground() {
-      if (!tgCssW || !tgCssH) return;
-      const groundY = tgCssH * 0.82; // aprox. donde cae la línea de suelo
-
-      teamGuestStars = [];
-      const starCount = Math.max(14, Math.floor((tgCssW * tgCssH) / 2600));
-      for (let i = 0; i < starCount; i++) {
-        teamGuestStars.push({
-          x: Math.random() * tgCssW,
-          y: Math.random() * groundY * 0.75,
-          r: Math.random() * 1.2 + 0.35,
-          phase: Math.random() * Math.PI * 2,
-          speed: 0.5 + Math.random() * 1.5
-        });
-      }
-
-      teamGuestMoon = { x: tgCssW * 0.78, y: groundY * 0.18, r: Math.max(10, tgCssW * 0.06) };
-
-      const seg = 6;
-      const pts = [];
-      for (let i = 0; i <= seg; i++) {
-        pts.push({ x: (tgCssW / seg) * i, y: groundY - tgCssH * 0.14 * (0.5 + Math.random() * 0.5) });
-      }
-      teamGuestMountains = pts;
-    }
-
-    function drawTeamGuestBackground(ctx) {
-      // Estrellas (con parpadeo, igual que en el juego principal)
-      const t = performance.now() * 0.001;
-      ctx.save();
-      teamGuestStars.forEach(s => {
-        const tw = 0.55 + 0.45 * Math.sin(t * s.speed + s.phase);
-        ctx.globalAlpha = Math.max(0.15, tw);
-        ctx.fillStyle = '#e2e8f0';
-        ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2); ctx.fill();
-      });
-      ctx.restore();
-
-      // Luna con resplandor
-      if (teamGuestMoon) {
-        ctx.save();
-        const glow = ctx.createRadialGradient(teamGuestMoon.x, teamGuestMoon.y, 0, teamGuestMoon.x, teamGuestMoon.y, teamGuestMoon.r * 3);
-        glow.addColorStop(0, 'rgba(226,232,240,0.35)');
-        glow.addColorStop(1, 'rgba(226,232,240,0)');
-        ctx.fillStyle = glow;
-        ctx.beginPath(); ctx.arc(teamGuestMoon.x, teamGuestMoon.y, teamGuestMoon.r * 3, 0, Math.PI * 2); ctx.fill();
-        ctx.fillStyle = '#f1f5f9';
-        ctx.beginPath(); ctx.arc(teamGuestMoon.x, teamGuestMoon.y, teamGuestMoon.r, 0, Math.PI * 2); ctx.fill();
-        ctx.restore();
-      }
-
-      // Silueta de montañas para dar profundidad
-      if (teamGuestMountains.length) {
-        ctx.save();
-        ctx.beginPath();
-        ctx.moveTo(0, tgCssH);
-        teamGuestMountains.forEach(p => ctx.lineTo(p.x, p.y));
-        ctx.lineTo(tgCssW, tgCssH);
-        ctx.closePath();
-        ctx.fillStyle = '#0c1533';
-        ctx.globalAlpha = 0.85;
-        ctx.fill();
-        ctx.restore();
-      }
-    }
-
-    // Dibuja la última foto recibida del host, escalando sus coordenadas
-    // (pensadas para el tamaño de SU canvas) al tamaño del canvas local.
-    function drawTeamGuestFrame() {
-      const ctx = teamGuestCtx;
-      ctx.clearRect(0, 0, tgCssW, tgCssH);
-      const f = teamGuestLatestFrame;
-      if (!f || !f.w || !f.h) {
-        ctx.fillStyle = 'rgba(148,163,184,0.6)';
-        ctx.font = '11px ui-monospace, monospace';
-        ctx.textAlign = 'center';
-        ctx.fillText('Esperando la señal de la partida…', tgCssW / 2, tgCssH / 2);
-        if (performance.now() - teamGuestViewStartedAt > 6000) {
-          ctx.font = '9.5px ui-monospace, monospace';
-          ctx.fillStyle = 'rgba(248,113,113,0.75)';
-          ctx.fillText('Tarda demasiado: revisa la consola del navegador', tgCssW / 2, tgCssH / 2 + 18);
-          ctx.fillText('y las reglas de seguridad de Firestore ("rooms").', tgCssW / 2, tgCssH / 2 + 32);
-        }
-        return;
-      }
-      const sx = tgCssW / f.w, sy = tgCssH / f.h;
-
-      if (teamGuestLiveBadge && teamGuestLiveBadge.textContent !== '● EN VIVO') {
-        teamGuestLiveBadge.textContent = '● EN VIVO';
-      }
-
-      // Fondo nocturno: cielo degradado + estrellas + luna + montañas
-      // (mismo estilo del juego principal, generado localmente)
-      const sky = ctx.createLinearGradient(0, 0, 0, tgCssH);
-      sky.addColorStop(0, '#0b1a3a');
-      sky.addColorStop(1, '#030712');
-      ctx.fillStyle = sky;
-      ctx.fillRect(0, 0, tgCssW, tgCssH);
-      drawTeamGuestBackground(ctx);
-
-      // Suelo
-      const groundY = (f.h - f.gy) * sy;
-      ctx.fillStyle = '#0b0f19';
-      ctx.fillRect(0, groundY, tgCssW, tgCssH - groundY);
-      ctx.strokeStyle = 'rgba(96,165,250,0.35)';
-      ctx.lineWidth = 1.5;
-      ctx.beginPath(); ctx.moveTo(0, groundY); ctx.lineTo(tgCssW, groundY); ctx.stroke();
-
-      // Obstáculos (orbes eléctricos que caen)
-      if (f.obs) {
-        f.obs.forEach(o => {
-          const ox = o.x * sx, oy = o.y * sy, r = Math.max(4, o.r * ((sx + sy) / 2) * 1.5);
-          const glow = ctx.createRadialGradient(ox, oy, 0, ox, oy, r * 2.2);
-          glow.addColorStop(0, 'rgba(147,197,253,0.9)');
-          glow.addColorStop(1, 'rgba(147,197,253,0)');
-          ctx.fillStyle = glow;
-          ctx.beginPath(); ctx.arc(ox, oy, r * 2.2, 0, Math.PI * 2); ctx.fill();
-          ctx.fillStyle = '#dbeafe';
-          ctx.beginPath(); ctx.arc(ox, oy, r, 0, Math.PI * 2); ctx.fill();
-        });
-      }
-
-      // OVNIs (mismo estilo que el juego principal: platillo + cúpula + luces)
-      if (f.ufos) {
-        f.ufos.forEach(u => {
-          const ux = u.x * sx, uy = u.y * sy;
-          const uw = Math.max(18, 24 * ((sx + sy) / 2) * 1.6);
-          const uh = uw * 0.29;
-
-          ctx.save();
-          ctx.globalCompositeOperation = 'lighter';
-          const glow = ctx.createRadialGradient(ux, uy, 0, ux, uy, uw * 1.9);
-          glow.addColorStop(0, 'rgba(96,165,250,0.4)');
-          glow.addColorStop(1, 'rgba(96,165,250,0)');
-          ctx.fillStyle = glow;
-          ctx.beginPath(); ctx.arc(ux, uy, uw * 1.9, 0, Math.PI * 2); ctx.fill();
-          ctx.restore();
-
-          ctx.save();
-          ctx.fillStyle = '#111827';
-          ctx.strokeStyle = '#93c5fd';
-          ctx.lineWidth = 1.6;
-          ctx.beginPath(); ctx.ellipse(ux, uy, uw, uh, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-
-          ctx.beginPath();
-          ctx.ellipse(ux, uy - uh * 0.85, uw * 0.46, uh * 1.3, 0, Math.PI, 0);
-          ctx.fillStyle = 'rgba(147,197,253,0.55)';
-          ctx.fill();
-          ctx.strokeStyle = '#dbeafe';
-          ctx.lineWidth = 1.2;
-          ctx.stroke();
-
-          for (let i = -2; i <= 2; i++) {
-            const blink = 0.35 + 0.65 * Math.abs(Math.sin(performance.now() * 0.006 + i * 1.3));
-            ctx.fillStyle = `rgba(245,158,11,${blink})`;
-            ctx.beginPath();
-            ctx.arc(ux + i * uw * 0.36, uy + uh * 0.6, 1.8, 0, Math.PI * 2);
-            ctx.fill();
-          }
-          ctx.restore();
-        });
-      }
-
-      // Altura fija de los personajes en base al tamaño de MI propio canvas
-      // (no depende del tamaño de la pantalla del host), para que siempre se
-      // vean claros sin importar si mi compañero juega en un monitor grande
-      // o en un celular chico.
-      const figH = Math.max(22, Math.min(46, tgCssH * 0.17));
-
-      // Jugador 1 (host)
-      if (f.p1) drawTeamGuestFigure(ctx, f.p1[0] * sx, f.p1[1] * sy, '#60a5fa', figH);
-      // Jugador 2 (yo, remoto): se dibuja con mi posición predicha localmente
-      // (instantánea al pulsar los controles), no con la del host, que llega
-      // con retraso de red y se usa solo para corregir la predicción.
-      if (teamGuestPred.initialized) drawTeamGuestFigure(ctx, teamGuestPred.x * sx, teamGuestPred.y * sy, '#fbbf24', figH, !teamGuestPred.grounded);
-      else if (f.p2) drawTeamGuestFigure(ctx, f.p2[0] * sx, f.p2[1] * sy, '#fbbf24', figH);
-    }
-
-    // Silueta simple tipo "muñeco de palitos" (cabeza + torso + piernas),
-    // parecida al estilo del personaje real del juego, en vez de una simple
-    // cápsula sin forma. `airborne` dobla las piernas hacia arriba (pose de salto).
-    function drawTeamGuestFigure(ctx, x, y, color, h, airborne) {
-      const headR = h * 0.16;
-      const legLen = h * 0.34;
-      const torsoTop = y - h;
-      const hipY = y - legLen;
-
-      ctx.save();
-      ctx.strokeStyle = color;
-      ctx.fillStyle = color;
-      ctx.lineWidth = Math.max(1.6, h * 0.09);
-      ctx.lineCap = 'round';
-      ctx.shadowColor = color;
-      ctx.shadowBlur = h * 0.35;
-
-      // Piernas
-      ctx.beginPath();
-      if (airborne) {
-        ctx.moveTo(x, hipY); ctx.lineTo(x - h * 0.14, hipY + legLen * 0.55);
-        ctx.moveTo(x, hipY); ctx.lineTo(x + h * 0.14, hipY + legLen * 0.55);
-      } else {
-        ctx.moveTo(x, hipY); ctx.lineTo(x - h * 0.13, y);
-        ctx.moveTo(x, hipY); ctx.lineTo(x + h * 0.13, y);
-      }
-      ctx.stroke();
-
-      // Torso
-      ctx.beginPath();
-      ctx.moveTo(x, torsoTop + headR * 1.6);
-      ctx.lineTo(x, hipY);
-      ctx.stroke();
-
-      // Brazos
-      ctx.beginPath();
-      ctx.moveTo(x, torsoTop + headR * 2.2); ctx.lineTo(x - h * 0.17, torsoTop + headR * 3.6);
-      ctx.moveTo(x, torsoTop + headR * 2.2); ctx.lineTo(x + h * 0.17, torsoTop + headR * 3.6);
-      ctx.stroke();
-
-      // Cabeza
-      ctx.beginPath();
-      ctx.arc(x, torsoTop + headR, headR, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.restore();
-    }
-
-    // Bucle de dibujo local del invitado: redibuja a ~60fps usando el último
-    // frame recibido (no espera a cada snapshot para sentirse fluido).
-    // =====================================================================
-    // --- PREDICCIÓN LOCAL DEL INVITADO (arregla el lag de controles) ---
-    // Antes, el movimiento del invitado dependía de un viaje completo por
-    // Firestore (botón → host aplica física → host reenvía frame → invitado
-    // dibuja), lo que se sentía muy lento e impreciso. Ahora el invitado
-    // simula localmente SU PROPIO personaje con la misma física exacta que
-    // usa el host para Jugador 2 (misma velocidad, gravedad y fuerza de
-    // salto), reaccionando al instante a sus propias teclas/botones. La
-    // posición real que calcula el host (autoritativa, la que de verdad
-    // decide colisiones y puntaje) llega igual por el `frame`, y se usa
-    // para corregir suavemente la predicción local (o resincronizar de
-    // golpe si la diferencia es demasiado grande), evitando que se note el
-    // salto pero manteniendo el control fluido. ---
-    // =====================================================================
-    const P2_PRED_SPEED = 6.5;   // debe coincidir con player2.speed en el host
-    const P2_PRED_JUMP = -8.7;   // debe coincidir con player2.jumpForce en el host
-    const P2_PRED_GRAVITY = 0.58; // debe coincidir con player2.gravity en el host
-    const P2_PRED_WIDTH = 16;    // debe coincidir con player2.width en el host
-    let teamGuestPred = { x: 0, y: 0, vx: 0, vy: 0, grounded: true, initialized: false, serverX: null, serverY: null };
-
-    function resetTeamGuestPrediction() {
-      teamGuestPred = { x: 0, y: 0, vx: 0, vy: 0, grounded: true, initialized: false, serverX: null, serverY: null };
-    }
-
-    function stepTeamGuestPrediction() {
-      const f = teamGuestLatestFrame;
-      if (!f || !f.w || !f.h) return;
-      const p = teamGuestPred;
-      const groundLevel = f.h - f.gy;
-
-      if (!p.initialized) {
-        p.x = (f.p2 ? f.p2[0] : f.w / 2);
-        p.y = (f.p2 ? f.p2[1] : groundLevel);
-        p.vx = 0; p.vy = 0; p.grounded = true; p.initialized = true;
-      }
-
-      // Física local (idéntica a la del host para Jugador 2)
-      if (teamGuestInput.left) p.vx = -P2_PRED_SPEED;
-      else if (teamGuestInput.right) p.vx = P2_PRED_SPEED;
-      else p.vx = 0;
-
-      p.x += p.vx;
-      p.vy += P2_PRED_GRAVITY;
-      p.y += p.vy;
-
-      if (p.x < P2_PRED_WIDTH / 2) p.x = P2_PRED_WIDTH / 2;
-      if (p.x > f.w - P2_PRED_WIDTH / 2) p.x = f.w - P2_PRED_WIDTH / 2;
-
-      if (p.y > groundLevel) { p.y = groundLevel; p.vy = 0; p.grounded = true; }
-      else { p.grounded = false; }
-
-      // Reconciliación con la posición autoritativa del host: corrección
-      // suave si la diferencia es pequeña, resincronización inmediata si es
-      // grande (por ejemplo tras una pausa larga de red).
-      if (f.p2) {
-        p.serverX = f.p2[0]; p.serverY = f.p2[1];
-        const dx = p.serverX - p.x, dy = p.serverY - p.y;
-        const dist = Math.hypot(dx, dy);
-        if (dist > 140) { p.x = p.serverX; p.y = p.serverY; p.vy = 0; }
-        else { p.x += dx * 0.08; p.y += dy * 0.08; }
-      }
-    }
-
-    // Envía un salto: incrementa un contador en Firestore para que el host
-    // lo detecte, Y ADEMÁS salta de inmediato en la predicción local.
-    function teamGuestLocalJump() {
-      if (teamGuestPred.grounded) {
-        teamGuestPred.vy = P2_PRED_JUMP;
-        teamGuestPred.grounded = false;
-      }
-    }
-    function teamGuestDrawLoop() {
-      if (!teamGuestLoopRunning) return;
-      stepTeamGuestPrediction();
-      drawTeamGuestFrame();
-      requestAnimationFrame(teamGuestDrawLoop);
-    }
-    function startTeamGuestLiveView() {
-      if (teamGuestLoopRunning) return;
-      teamGuestLoopRunning = true;
-      teamGuestLatestFrame = null;
-      resetTeamGuestPrediction();
-      teamGuestViewStartedAt = performance.now();
-      resizeTeamGuestCanvas();
-      requestAnimationFrame(teamGuestDrawLoop);
-    }
-    function stopTeamGuestLiveView() {
-      teamGuestLoopRunning = false;
-      teamGuestLatestFrame = null;
-      resetTeamGuestPrediction();
-    }
-
-    // Estado local del input remoto del invitado, antes de enviarlo a Firestore.
-    let teamGuestInput = { left: false, right: false };
-    let teamGuestJumpSeq = 0;
-    let teamGuestControlsEnabled = false;
-
-    function setTeamGuestControlsEnabled(enabled) {
-      teamGuestControlsEnabled = enabled;
-      [teamGuestBtnLeft, teamGuestBtnJump, teamGuestBtnRight].forEach((btn) => {
-        btn.disabled = !enabled;
-        btn.style.opacity = enabled ? '' : '0.4';
-        btn.style.pointerEvents = enabled ? '' : 'none';
-      });
-      if (!enabled) { teamGuestInput.left = false; teamGuestInput.right = false; }
-    }
-
-    // Envía mi estado de movimiento (izquierda/derecha) al host en cuanto cambia.
-    function sendTeamGuestMove() {
-      if (!multiplayer || multiplayer.mode !== 'team' || multiplayer.role !== 'guest') return;
-      window.firebaseReady.then(fb => {
-        fb.updateDoc(fb.doc(fb.db, 'rooms', multiplayer.code), {
-          guestLeft: teamGuestInput.left,
-          guestRight: teamGuestInput.right
-        }).catch(() => {});
-      });
-    }
-
-    function teamGuestSetLeft(v) { if (!teamGuestControlsEnabled) return; teamGuestInput.left = v; sendTeamGuestMove(); }
-    function teamGuestSetRight(v) { if (!teamGuestControlsEnabled) return; teamGuestInput.right = v; sendTeamGuestMove(); }
-
-    // Envía un salto: incrementa un contador en Firestore (`increment`) para que
-    // el host detecte el "flanco" de un nuevo salto en cuanto llegue el snapshot.
-    // También salta de inmediato en la predicción local (ver más arriba).
-    function teamGuestJump() {
-      if (!teamGuestControlsEnabled || !multiplayer || multiplayer.mode !== 'team' || multiplayer.role !== 'guest') return;
-      teamGuestLocalJump();
-      window.firebaseReady.then(fb => {
-        fb.updateDoc(fb.doc(fb.db, 'rooms', multiplayer.code), {
-          guestJumpSeq: fb.increment(1)
-        }).catch(() => {});
-      });
-    }
-
-    bindHold(teamGuestBtnLeft, () => teamGuestSetLeft(true), () => teamGuestSetLeft(false));
-    bindHold(teamGuestBtnRight, () => teamGuestSetRight(true), () => teamGuestSetRight(false));
-    bindHold(teamGuestBtnJump, () => teamGuestJump());
-
-    // Soporte de teclado (←/→/↑) en el dispositivo del invitado, igual que en
-    // Modo Equipo local, pero enviando el input por red en vez de aplicarlo
-    // directamente (aquí no corre ninguna simulación local).
-    window.addEventListener('keydown', (e) => {
-      if (!teamGuestControlsEnabled) return;
-      if (e.code === 'ArrowLeft') { e.preventDefault(); teamGuestSetLeft(true); }
-      if (e.code === 'ArrowRight') { e.preventDefault(); teamGuestSetRight(true); }
-      if (e.code === 'ArrowUp') { e.preventDefault(); teamGuestJump(); }
-    });
-    window.addEventListener('keyup', (e) => {
-      if (!teamGuestControlsEnabled) return;
-      if (e.code === 'ArrowLeft') teamGuestSetLeft(false);
-      if (e.code === 'ArrowRight') teamGuestSetRight(false);
-    });
-
-    // Salir de la sala desde el panel del invitado: vuelve a la pantalla normal.
-    teamGuestLeaveBtn.addEventListener('click', () => {
-      leaveMultiplayer();
-      teamMode = false;
-      hideP2Controls();
-      updateControlsHint();
-      stopTeamGuestLiveView();
-    });
-
     const ROOM_CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // sin 0/O/1/I para evitar confusiones
     function generateRoomCode() {
       let out = '';
@@ -2915,66 +2265,23 @@
     let roomFlow = { code: null, role: null, unsub: null, countdownTimer: null };
     // Estado de la partida multijugador activa (durante PLAYING/GAMEOVER)
     let multiplayer = null; // { code, role, opponentName, unsub, lastSync, resultShown, mode }
-    // Modo de sala elegido en el selector antes de crear/unirse: 'versus' (1 vs 1)
-    // o 'duo' (2 vs 2). Determina cómo se etiqueta la sala y si este dispositivo
-    // juega con un solo jugador o con dos (Jugador 1 + Jugador 2 en equipo).
+    // Modo de sala elegido antes de crear/unirse. Solo existe 'versus' (1 vs 1):
+    // cada jugador juega online desde su propio dispositivo.
     let pendingRoomMode = 'versus';
     function roomModeLabel(mode) {
-      if (mode === 'duo') return '2 vs 2';
-      if (mode === 'team') return '🛡️ Supervivencia en Equipo';
       return 'Versus (1 vs 1)';
     }
 
     function openRoomModal() {
       roomModal.classList.remove('hidden');
-      renderModeChooser();
+      pendingRoomMode = 'versus';
+      renderRoomMenu();
     }
 
-    // --- Selección de modo al crear una partida de 2 jugadores ---
-    function renderModeChooser() {
-      roomModalBody.innerHTML = `
-        <p class="room-status-line">Elige el modo de juego:</p>
-        <button id="mode-versus-btn" class="room-btn">🆚 Modo Versus (1 vs 1)</button>
-        <p class="room-status-line" style="margin-top:-6px; opacity:0.75; font-size:9.5px;">Cada uno juega online desde su propio dispositivo. Gana quien saque más puntaje.</p>
-        <button id="mode-duo-btn" class="room-btn" style="margin-top:12px;">⚔️ Modo 2 vs 2</button>
-        <p class="room-status-line" style="margin-top:-6px; opacity:0.75; font-size:9.5px;">Dos equipos online (2 jugadores por dispositivo, comparten vidas y puntaje). Gana el equipo con mayor puntaje combinado.</p>
-        <button id="mode-team-btn" class="room-btn secondary" style="margin-top:12px;">🛡️ Supervivencia en Equipo</button>
-        <p class="room-status-line" style="margin-top:-6px; opacity:0.75; font-size:9.5px;">Dos jugadores comparten vidas y puntaje, sobreviviendo juntos en la misma partida. ¡Sobrevivan juntos!</p>
-      `;
-      document.getElementById('mode-versus-btn').addEventListener('click', () => { pendingRoomMode = 'versus'; renderRoomMenu(); });
-      document.getElementById('mode-duo-btn').addEventListener('click', () => { pendingRoomMode = 'duo'; renderRoomMenu(); });
-      document.getElementById('mode-team-btn').addEventListener('click', renderTeamSubmenu);
-    }
-
-    // --- Supervivencia en Equipo: ahora se puede jugar de 2 formas ---
-    function renderTeamSubmenu() {
-      roomModalBody.innerHTML = `
-        <p class="room-status-line">¿Cómo van a jugar en equipo?</p>
-        <button id="team-local-btn" class="room-btn">📱 Mismo dispositivo</button>
-        <p class="room-status-line" style="margin-top:-6px; opacity:0.75; font-size:9.5px;">Los 2 jugadores comparten este dispositivo (J1: A/D/W · J2: ←/→/↑).</p>
-        <button id="team-online-btn" class="room-btn" style="margin-top:12px;">📶 Crear sala online</button>
-        <p class="room-status-line" style="margin-top:-6px; opacity:0.75; font-size:9.5px;">Tu compañero se conecta desde su propio dispositivo con un código. La partida se juega en una sola pantalla: la de quien crea la sala.</p>
-        <button id="team-back-btn" class="room-btn secondary" style="margin-top:12px;">◀ Cambiar modo</button>
-      `;
-      document.getElementById('team-local-btn').addEventListener('click', startTeamSurvival);
-      document.getElementById('team-online-btn').addEventListener('click', () => { pendingRoomMode = 'team'; renderRoomMenu(); });
-      document.getElementById('team-back-btn').addEventListener('click', renderModeChooser);
-    }
-
-    // Inicia el modo Supervivencia en Equipo: local, en el mismo dispositivo,
-    // sin salas ni Firestore de por medio (no es "versus" contra un rival).
-    function startTeamSurvival() {
-      teardownRoomFlow();
-      leaveMultiplayer();
-      roomModal.classList.add('hidden');
-      teamMode = true;
-      showP2Controls();
-      updateControlsHint();
-      resetGame();
-    }
     function closeRoomModal() {
       roomModal.classList.add('hidden');
       teardownRoomFlow();
+      teardownQuickFlow();
     }
     roomModalClose.addEventListener('click', closeRoomModal);
     mpModeBtn.addEventListener('click', openRoomModal);
@@ -3011,20 +2318,18 @@
     }
 
     function renderRoomMenu() {
-      const introText = pendingRoomMode === 'duo'
-        ? 'Modo 2 vs 2: tu equipo (2 jugadores en este dispositivo) se enfrenta en tiempo real a otro equipo (2 jugadores en otro dispositivo).'
-        : pendingRoomMode === 'team'
-        ? 'Supervivencia en Equipo online: tu compañero se conecta desde su propio dispositivo. La partida se ve y se juega en la pantalla de quien crea la sala; comparten vidas y puntaje.'
-        : 'Juega en tiempo real contra otra persona, cada uno desde su propio dispositivo.';
+      const introText = 'Juega en tiempo real contra otras personas.';
       roomModalBody.innerHTML = `
         <p class="room-status-line">${introText}</p>
-        <button id="room-create-btn" class="room-btn">Crear Sala</button>
-        <button id="room-join-btn" class="room-btn secondary">Unirse a una Sala</button>
-        <button id="room-mode-back-btn" class="room-btn secondary" style="margin-top:10px;">◀ Cambiar modo</button>
+        <button id="qm-pick-survival" class="room-btn">🔍 Partida Rápida — Survival (1 vs 1)</button>
+        <button id="qm-pick-2vs2" class="room-btn">🔍 Partida Rápida — 2vs2 (hasta 4)</button>
+        <button id="room-create-btn" class="room-btn secondary">Crear Sala por Código</button>
+        <button id="room-join-btn" class="room-btn secondary">Unirse con Código</button>
       `;
+      document.getElementById('qm-pick-survival').addEventListener('click', () => startQuickSearch('MODO_SURVIVAL'));
+      document.getElementById('qm-pick-2vs2').addEventListener('click', () => startQuickSearch('MODO_2VS2'));
       document.getElementById('room-create-btn').addEventListener('click', renderCreateOptions);
       document.getElementById('room-join-btn').addEventListener('click', renderJoinForm);
-      document.getElementById('room-mode-back-btn').addEventListener('click', renderModeChooser);
     }
 
     function renderCreateOptions() {
@@ -3058,7 +2363,7 @@
     }
 
     function renderJoinForm() {
-      const rivalWord = pendingRoomMode === 'duo' ? 'el otro equipo' : pendingRoomMode === 'team' ? 'tu compañero de equipo' : 'tu rival';
+      const rivalWord = 'tu rival';
       roomModalBody.innerHTML = `
         <p class="room-status-line">Ingresa el código de 5 caracteres que te compartió ${rivalWord}. Asegúrate de haber elegido el mismo modo (${escapeHtml(roomModeLabel(pendingRoomMode))}).</p>
         <input id="room-join-input" class="room-input" maxlength="5" placeholder="XXXXX" autocomplete="off">
@@ -3090,13 +2395,9 @@
     }
 
     function renderRoomWaiting(code, hasPassword, mode) {
-      const rivalWord = mode === 'duo' ? 'con el equipo rival' : mode === 'team' ? 'con tu compañero de equipo' : 'con tu rival';
-      const waitWord = mode === 'duo' ? 'Esperando al equipo rival…' : mode === 'team' ? 'Esperando a tu compañero…' : 'Esperando oponente…';
-      const deviceHint = mode === 'duo'
-        ? `${deviceLabel(DEVICE_TYPE)} — los 2 jugadores de tu equipo juegan en este dispositivo; el equipo rival debe unirse desde el mismo tipo de dispositivo`
-        : mode === 'team'
-        ? `${deviceLabel(DEVICE_TYPE)} — la partida se jugará en esta pantalla; tu compañero la controlará de forma remota desde su propio dispositivo`
-        : `${deviceLabel(DEVICE_TYPE)} — tu rival debe unirse desde el mismo tipo de dispositivo`;
+      const rivalWord = 'con tu rival';
+      const waitWord = 'Esperando oponente…';
+      const deviceHint = `${deviceLabel(DEVICE_TYPE)} — tu rival debe unirse desde el mismo tipo de dispositivo`;
       roomModalBody.innerHTML = `
         <p class="room-status-line">Comparte este código ${rivalWord}:</p>
         <div class="room-code-display">${escapeHtml(code)}</div>
@@ -3110,9 +2411,9 @@
     }
 
     function renderRoomReady(myName, opponentName, mode) {
-      const foundLine = mode === 'duo' ? '¡Equipo rival encontrado!' : mode === 'team' ? '¡Tu compañero se conectó!' : '¡Oponente encontrado!';
-      const startLine = mode === 'duo' ? 'El enfrentamiento por equipos empieza automáticamente para ambos.' : mode === 'team' ? 'La partida empieza automáticamente para los dos.' : 'La partida empieza automáticamente para ambos.';
-      const sep = mode === 'team' ? '🤝' : 'VS';
+      const foundLine = '¡Oponente encontrado!';
+      const startLine = 'La partida empieza automáticamente para ambos.';
+      const sep = 'VS';
       roomModalBody.innerHTML = `
         <p class="room-status-line">${foundLine}</p>
         <div class="vs-row">
@@ -3178,7 +2479,7 @@
           if (errEl) errEl.textContent = `Esta sala es modo ${roomModeLabel(data.mode)}. Vuelve y elige ese mismo modo para unirte.`;
           return;
         }
-        if (data.mode !== 'team' && data.hostDevice && data.hostDevice !== DEVICE_TYPE) {
+        if (data.hostDevice && data.hostDevice !== DEVICE_TYPE) {
           if (errEl) errEl.textContent = `Esta sala fue creada desde ${deviceLabel(data.hostDevice)}. Debes unirte desde el mismo tipo de dispositivo (estás en ${deviceLabel(DEVICE_TYPE)}).`;
           return;
         }
@@ -3208,7 +2509,7 @@
           if (errEl) errEl.textContent = `Esta sala es modo ${roomModeLabel(data.mode)}. Vuelve y elige ese mismo modo para unirte.`;
           return;
         }
-        if (data.mode !== 'team' && data.hostDevice && data.hostDevice !== DEVICE_TYPE) {
+        if (data.hostDevice && data.hostDevice !== DEVICE_TYPE) {
           if (errEl) errEl.textContent = `Esta sala fue creada desde ${deviceLabel(data.hostDevice)}. Debes unirte desde el mismo tipo de dispositivo.`;
           return;
         }
@@ -3256,7 +2557,7 @@
       if (data.status === 'ready' && !multiplayer) {
         const myName = role === 'host' ? data.hostName : data.guestName;
         const opponentName = role === 'host' ? data.guestName : data.hostName;
-        const mode = data.mode === 'duo' ? 'duo' : data.mode === 'team' ? 'team' : 'versus';
+        const mode = 'versus';
         renderRoomReady(myName, opponentName || '…', mode);
 
         if (!roomFlow.countdownTimer && data.startAt) {
@@ -3265,7 +2566,7 @@
             const el = document.getElementById('room-countdown-val');
             if (remainingMs <= 0) {
               if (el) el.textContent = '¡YA!';
-              beginMultiplayerRound(code, role, opponentName || (mode === 'team' ? 'Compañero' : 'Rival'), mode);
+              beginMultiplayerRound(code, role, opponentName || 'Rival', mode);
               return;
             }
             if (el) el.textContent = Math.ceil(remainingMs / 1000);
@@ -3278,11 +2579,6 @@
 
       // Ya en partida: sincroniza el panel del oponente en vivo
       if (multiplayer && (data.status === 'ready' || data.status === 'playing' || data.status === 'finished')) {
-        // Supervivencia en Equipo online: no hay "oponente" que comparar, hay un
-        // compañero cuyo input hay que aplicar (host) o cuyo marcador hay que
-        // mostrar (invitado). Se maneja aparte y se sale de esta función.
-        if (multiplayer.mode === 'team') { handleTeamSnapshot(role, data); return; }
-
         const oppScore = role === 'host' ? data.guestScore : data.hostScore;
         const oppLives = role === 'host' ? data.guestLives : data.hostLives;
         const oppFinished = role === 'host' ? data.guestFinished : data.hostFinished;
@@ -3304,94 +2600,18 @@
       }
     }
 
-    // --- Aplica cada snapshot de la sala durante una partida de Supervivencia
-    // en Equipo online: el host recibe el input remoto de su compañero y lo
-    // vuelca en `keys2` (así reutiliza toda la física ya existente del
-    // Jugador 2); el invitado solo actualiza su panel de control remoto con
-    // el marcador que transmite el host. ---
-    function handleTeamSnapshot(role, data) {
-      if (role === 'host') {
-        keys2.left = !!data.guestLeft;
-        keys2.right = !!data.guestRight;
-        const seq = data.guestJumpSeq || 0;
-        if (seq > (multiplayer.lastGuestJumpSeq || 0)) {
-          multiplayer.lastGuestJumpSeq = seq;
-          tryJump2();
-        }
-        // El invitado ya respondió a nuestra oferta: completamos la conexión.
-        if (data.webrtcAnswer && webrtcPC && !webrtcPC.currentRemoteDescription) {
-          webrtcPC.setRemoteDescription(new RTCSessionDescription(data.webrtcAnswer)).catch(() => {});
-        }
-        return;
-      }
-      // role === 'guest'
-      if (data.frame) teamGuestLatestFrame = data.frame;
-      // NOTA: se desactivó a propósito la conexión por video WebRTC aquí.
-      // Esa vía mostraba literalmente la pantalla del host, pero el control
-      // seguía dependiendo 100% del viaje por Firestore (sin predicción
-      // local) y se congelaba en redes con NAT restrictivo (no hay TURN
-      // configurado). Siempre usamos la vista reconstruida de abajo, que sí
-      // tiene predicción local y se siente fluida.
-      // if (data.webrtcOffer && !webrtcPC) { startGuestWebRTC(data.webrtcOffer); }
-      const finished = !!data.hostFinished;
-      teamGuestScoreEl.textContent = finished ? (data.hostFinalScore || 0) : (data.hostScore || 0);
-      teamGuestLivesEl.textContent = Math.max(0, data.hostLives ?? START_LIVES);
-      if (finished && !multiplayer.resultShown) {
-        multiplayer.resultShown = true;
-        teamGuestStatusEl.textContent = '☠️ GAME OVER';
-        setTeamGuestControlsEnabled(false);
-      } else if (!finished) {
-        teamGuestStatusEl.textContent = '🟢 ¡Jugando!';
-      }
-    }
-
     function beginMultiplayerRound(code, role, opponentName, mode) {
       if (roomFlow.countdownTimer) { clearTimeout(roomFlow.countdownTimer); roomFlow.countdownTimer = null; }
-      multiplayer = { code, role, opponentName, mode, unsub: roomFlow.unsub, lastSync: 0, resultShown: false, lastGuestJumpSeq: 0 };
+      multiplayer = { code, role, opponentName, mode, unsub: roomFlow.unsub, lastSync: 0, resultShown: false };
       roomFlow = { code: null, role: null, unsub: null, countdownTimer: null }; // la sesión ahora vive en `multiplayer`
       window.firebaseReady.then(fb => {
         fb.updateDoc(fb.doc(fb.db, 'rooms', code), { status: 'playing' }).catch(() => {});
       });
       roomModal.classList.add('hidden');
 
-      if (mode === 'team') {
-        if (role === 'guest') {
-          // El invitado no ejecuta su propia partida: solo controla al Jugador 2
-          // a distancia y ve el marcador. La partida real corre en la pantalla
-          // del host (una sola pantalla compartida).
-          teamMode = false;
-          hideP2Controls();
-          localGameView.style.display = 'none';
-          teamGuestPanel.style.display = '';
-          teamGuestHostNameEl.textContent = opponentName || 'tu compañero';
-          teamGuestScoreEl.textContent = '0';
-          teamGuestLivesEl.textContent = START_LIVES;
-          teamGuestStatusEl.textContent = '🟢 ¡Jugando!';
-          setTeamGuestControlsEnabled(true);
-          startTeamGuestLiveView();
-          return;
-        }
-        // role === 'host': juega normalmente en Modo Equipo, pero el Jugador 2
-        // lo controla el compañero remoto (su input llega vía handleTeamSnapshot).
-        teamMode = true;
-        hideP2Controls();
-        updateControlsHint();
-        resetGame();
-        // NOTA: se desactivó a propósito compartir la pantalla por WebRTC
-        // (ver explicación en handleTeamSnapshot). El invitado siempre ve la
-        // vista reconstruida a partir del `frame` sincronizado por Firestore.
-        // startHostScreenShare();
-        return;
-      }
-
-      // En modo 2 vs 2, este dispositivo lo juegan los 2 integrantes del equipo
-      // (comparten vidas y puntaje, igual que en Supervivencia en Equipo), y ese
-      // puntaje combinado es el que se compara contra el del equipo rival.
-      teamMode = mode === 'duo';
-      if (teamMode) { showP2Controls(); } else { hideP2Controls(); }
       updateControlsHint();
       mpHud.classList.add('show');
-      mpOpponentName.textContent = mode === 'duo' ? `👥 ${opponentName}` : opponentName;
+      mpOpponentName.textContent = opponentName;
       mpOpponentScore.textContent = '0';
       mpOpponentLives.textContent = START_LIVES;
       mpOpponentStatus.textContent = '';
@@ -3413,41 +2633,6 @@
       mpSyncNow();
     }
 
-    // --- Transmite un "frame" ligero (posiciones redondeadas, no un video)
-    // para que el invitado de Supervivencia en Equipo online pueda reconstruir
-    // la partida en su propia pantalla, en vez de solo ver el marcador.
-    // Se limita a ~8 veces por segundo para no saturar Firestore. ---
-    function mpBroadcastFrame(time) {
-      if (!multiplayer || multiplayer.mode !== 'team' || multiplayer.role !== 'host') return;
-      if (gameState !== 'PLAYING') return;
-      if (time - (multiplayer.lastFrameSync || 0) < 90) return;
-      multiplayer.lastFrameSync = time;
-
-      const round = (n) => Math.round(n);
-      const frame = {
-        w: round(cssW), h: round(cssH), gy: round(groundOffset()),
-        p1: [round(player.x), round(player.y)],
-        p2: teamMode ? [round(player2.x), round(player2.y)] : null,
-        obs: obstacles.slice(0, 20).map(o => ({ x: round(o.x), y: round(o.y), r: round(o.radius) })),
-        ufos: ufos.slice(0, 6).map(u => ({ x: round(u.x), y: round(u.y) }))
-      };
-      window.firebaseReady.then(fb => {
-        try {
-          fb.updateDoc(fb.doc(fb.db, 'rooms', multiplayer.code), { frame }).catch((err) => {
-            // Si esto falla repetidamente con code 'permission-denied', las reglas de
-            // seguridad de Firestore están rechazando el campo "frame" (revisa la
-            // consola de Firebase: Firestore Database > Reglas).
-            console.error('[frame sync] Error enviando el frame al invitado:', err);
-          });
-        } catch (err) {
-          // updateDoc puede lanzar de forma síncrona (por ejemplo, datos con un
-          // formato que Firestore no admite) en vez de devolver una promesa
-          // rechazada; lo atrapamos aquí para que nunca quede en silencio.
-          console.error('[frame sync] Error de formato al construir el frame:', err);
-        }
-      });
-    }
-
     function mpReportFinished() {
       if (!multiplayer) return;
       window.firebaseReady.then(fb => {
@@ -3460,14 +2645,13 @@
     }
 
     function showMultiplayerResult(myScore, oppScore, opponentName, mode) {
-      const isDuo = mode === 'duo';
       let verdict, color;
-      if (myScore > oppScore) { verdict = isDuo ? '🏆 ¡TU EQUIPO GANÓ!' : '🏆 ¡GANASTE!'; color = '#34d399'; }
-      else if (myScore < oppScore) { verdict = isDuo ? '💀 TU EQUIPO PERDIÓ' : '💀 PERDISTE'; color = '#f87171'; }
+      if (myScore > oppScore) { verdict = '🏆 ¡GANASTE!'; color = '#34d399'; }
+      else if (myScore < oppScore) { verdict = '💀 PERDISTE'; color = '#f87171'; }
       else { verdict = '🤝 EMPATE'; color = '#fbbf24'; }
 
-      const myLabel = isDuo ? 'TU EQUIPO' : 'TÚ';
-      const oppLabel = isDuo ? `EQUIPO ${escapeHtml(opponentName).toUpperCase()}` : escapeHtml(opponentName);
+      const myLabel = 'TÚ';
+      const oppLabel = escapeHtml(opponentName);
 
       finalScoreWrap.style.display = 'none';
       mpResultEl.style.display = 'block';
@@ -3488,14 +2672,493 @@
         multiplayer = null;
       }
       mpHud.classList.remove('show');
-      // Por si veníamos del panel de control remoto (invitado en Supervivencia
-      // en Equipo online), lo ocultamos y restauramos la vista normal del juego.
-      setTeamGuestControlsEnabled(false);
-      teamGuestPanel.style.display = 'none';
-      localGameView.style.display = '';
-      stopTeamGuestLiveView();
-      teardownWebRTC();
     }
+
+    // =====================================================================
+    // --- PARTIDA RÁPIDA (MATCHMAKING AUTOMÁTICO) ---
+    // Arquitectura independiente del sistema de salas por código/contraseña
+    // de arriba (que sigue intacto). Usa la colección "matches" en
+    // Firestore, con dos tipos de partida:
+    //   - MODO_SURVIVAL: máx. 2 jugadores.
+    //   - MODO_2VS2: máx. 4 jugadores, todos contra todos (no hay equipos).
+    // Al buscar partida, el cliente consulta salas "esperando" de ese modo
+    // con cupo libre y se une de forma ATÓMICA (transacción de Firestore,
+    // para que dos personas no puedan tomar el mismo último cupo a la
+    // vez). Si no encuentra ninguna, crea una nueva con un roomId único
+    // autogenerado por Firestore — no hay un número fijo de salas.
+    //
+    // Para que no se sature Firestore, la posición/acción de cada jugador
+    // se transmite a un tick rate limitado (~12-13 envíos/seg, dentro del
+    // rango de 10-15 pedido) en vez de cada frame (60 FPS). En el cliente,
+    // esos paquetes se interpolan linealmente para que el indicador del
+    // rival en el HUD se vea fluido aunque lleguen pocos datos por
+    // segundo. Nota: cada jugador sigue generando sus propios obstáculos
+    // de forma independiente (así ya funcionaba el modo 2 jugadores por
+    // código), así que los rivales se muestran como un avatar animado en
+    // el HUD, no dibujados dentro de tu propia pista — unificar eso en un
+    // mundo compartido es un cambio bastante más grande, aparte de este.
+    //
+    // Limpieza de salas: cada jugador manda un "heartbeat" cada pocos
+    // segundos. Si un rival deja de mandarlo (se desconectó / cerró la
+    // pestaña), cualquier cliente que siga presente lo detecta y lo saca
+    // de la sala vía transacción; si la sala queda vacía se borra por
+    // completo, para no acumular salas fantasma. También se intenta una
+    // salida "best-effort" al cerrar la pestaña.
+    // =====================================================================
+    const QM_MODES = {
+      MODO_SURVIVAL: { max: 2, label: 'Survival (1 vs 1)' },
+      MODO_2VS2:     { max: 4, label: '2vs2 (todos contra todos)' }
+    };
+    const QM_TICK_MS = 80;        // ~12-13 envíos/seg de posición (dentro de 10-15/s)
+    const QM_INTERP_MS = 130;     // ventana de interpolación en cliente (algo mayor al tick, absorbe jitter de red)
+    const QM_HEARTBEAT_MS = 4000; // frecuencia del "estoy vivo"
+    const QM_STALE_MS = 9000;     // sin heartbeat en este tiempo => se considera desconectado
+    const QM_COUNTDOWN_MS = 3500;
+
+    const qmHud = document.getElementById('qm-hud');
+    const qmOpponentsEl = document.getElementById('qm-opponents');
+
+    // Estado de la sala mientras se está formando (buscando/esperando jugadores)
+    let qmFlow = null; // { matchId, uid, mode, unsub, countdownTimer }
+    // Estado de la partida rápida activa (durante PLAYING/GAMEOVER)
+    let quickMatch = null; // { matchId, uid, mode, maxPlayers, unsub, lastBroadcast, heartbeatTimer, staleCheckTimer, opponents:{}, resultShown }
+    let qmSearchCancelled = false;
+
+    function qmNewPlayerState() {
+      return {
+        name: (currentUser && currentUser.name) || 'Jugador',
+        flag: (currentUser && currentUser.flag) || '🏳️',
+        score: 0, lives: START_LIVES,
+        finished: false, finalScore: 0, finalTime: 0,
+        x: 0, y: 0, vx: 0, facing: 1, grounded: true, action: 'idle',
+        lastSeen: Date.now()
+      };
+    }
+
+    async function startQuickSearch(mode) {
+      const cfg = QM_MODES[mode];
+      qmSearchCancelled = false;
+      roomModalBody.innerHTML = `<p class="room-status-line">Buscando partida (${escapeHtml(cfg.label)})…</p><div class="room-spinner"></div><button id="qm-cancel-search" class="room-btn secondary">Cancelar</button>`;
+      document.getElementById('qm-cancel-search').addEventListener('click', () => { qmSearchCancelled = true; renderRoomMenu(); });
+
+      try {
+        const fb = await window.firebaseReady;
+        const uid = fb.auth.currentUser && fb.auth.currentUser.uid;
+        if (!uid) {
+          roomModalBody.innerHTML = `<p class="room-error">Debes iniciar sesión para jugar en línea.</p><button id="room-back-btn" class="room-btn secondary">Volver</button>`;
+          document.getElementById('room-back-btn').addEventListener('click', renderRoomMenu);
+          return;
+        }
+        const matchId = await findOrCreateMatch(fb, mode, cfg, uid);
+        if (qmSearchCancelled) { qmLeaveDoc(fb, matchId, uid); return; } // canceló mientras se buscaba/creaba
+
+        qmFlow = { matchId, uid, mode, unsub: null, countdownTimer: null };
+        roomModalBody.innerHTML = `<p class="room-status-line">Conectado. Esperando jugadores…</p><div class="room-spinner"></div><button id="qm-cancel-wait" class="room-btn secondary">Cancelar</button>`;
+        document.getElementById('qm-cancel-wait').addEventListener('click', cancelQuickWait);
+        listenQuickMatch(fb, matchId, uid, mode);
+      } catch (e) {
+        console.error('Error en matchmaking:', e);
+        roomModalBody.innerHTML = `<p class="room-error">${escapeHtml(roomErrorMessage(e))}</p><button id="room-back-btn" class="room-btn secondary">Volver</button>`;
+        document.getElementById('room-back-btn').addEventListener('click', renderRoomMenu);
+      }
+    }
+
+    function cancelQuickWait() {
+      teardownQuickFlow();
+      renderRoomMenu();
+    }
+
+    // Cancela/limpia la sala mientras aún se está formando (antes de PLAYING).
+    // Igual que teardownRoomFlow() para el sistema de código, pero para "matches".
+    function teardownQuickFlow() {
+      if (!qmFlow) return;
+      if (qmFlow.unsub) qmFlow.unsub();
+      if (qmFlow.countdownTimer) clearTimeout(qmFlow.countdownTimer);
+      const { matchId, uid } = qmFlow;
+      if (matchId) window.firebaseReady.then(fb => qmLeaveDoc(fb, matchId, uid));
+      qmFlow = null;
+    }
+
+    // Busca una sala "esperando" de este modo con cupo libre y se une de
+    // forma atómica; si no encuentra ninguna (o todas se llenan justo
+    // antes), crea una sala nueva.
+    async function findOrCreateMatch(fb, mode, cfg, uid) {
+      const matchesCol = fb.collection(fb.db, 'matches');
+      const q = fb.query(matchesCol, fb.where('mode', '==', mode), fb.where('status', '==', 'esperando'), fb.limit(10));
+      const snap = await fb.getDocs(q);
+      for (const docSnap of snap.docs) {
+        const joined = await tryJoinMatch(fb, docSnap.ref, cfg, uid);
+        if (joined) return docSnap.id;
+      }
+      return await createMatch(fb, mode, cfg, uid);
+    }
+
+    // Transacción: solo une al jugador si en ESE momento sigue habiendo
+    // cupo libre (evita que dos personas ocupen el mismo último lugar).
+    async function tryJoinMatch(fb, ref, cfg, uid) {
+      try {
+        return await fb.runTransaction(fb.db, async (tx) => {
+          const snap = await tx.get(ref);
+          if (!snap.exists()) return false;
+          const data = snap.data();
+          if (data.status !== 'esperando') return false;
+          if (data.players && data.players[uid]) return true; // reconexión: ya estaba dentro
+          const count = data.playerCount || 0;
+          if (count >= cfg.max) return false;
+
+          const newCount = count + 1;
+          const update = {
+            playerCount: newCount,
+            [`players.${uid}`]: qmNewPlayerState(),
+            playerOrder: [...(data.playerOrder || []), uid]
+          };
+          if (newCount >= cfg.max) {
+            update.status = 'jugando';
+            update.startAt = Date.now() + QM_COUNTDOWN_MS;
+          }
+          tx.update(ref, update);
+          return true;
+        });
+      } catch (e) {
+        console.error('No se pudo unir a la sala:', e);
+        return false;
+      }
+    }
+
+    async function createMatch(fb, mode, cfg, uid) {
+      const ref = fb.doc(fb.collection(fb.db, 'matches')); // roomId único autogenerado
+      await fb.setDoc(ref, {
+        mode, maxPlayers: cfg.max,
+        status: 'esperando',
+        createdAt: fb.serverTimestamp(),
+        startAt: null,
+        playerCount: 1,
+        playerOrder: [uid],
+        players: { [uid]: qmNewPlayerState() }
+      });
+      return ref.id;
+    }
+
+    function listenQuickMatch(fb, matchId, uid, mode) {
+      const ref = fb.doc(fb.db, 'matches', matchId);
+      const unsub = fb.onSnapshot(ref, (snap) => {
+        if (!snap.exists()) {
+          // La sala fue eliminada (p.ej. limpieza por abandono de todos los demás)
+          if (qmFlow && qmFlow.matchId === matchId) { qmFlow = null; if (!roomModal.classList.contains('hidden')) renderRoomMenu(); }
+          return;
+        }
+        handleQuickMatchSnapshot(matchId, uid, mode, snap.data());
+      }, (err) => console.error('Error escuchando partida:', err));
+      if (qmFlow && qmFlow.matchId === matchId) qmFlow.unsub = unsub;
+      else if (quickMatch && quickMatch.matchId === matchId) quickMatch.unsub = unsub;
+    }
+
+    function handleQuickMatchSnapshot(matchId, uid, mode, data) {
+      if (data.status === 'esperando') {
+        if (qmFlow && qmFlow.matchId === matchId) {
+          const count = data.playerCount || 1;
+          roomModalBody.innerHTML = `<p class="room-status-line">Esperando jugadores… (${count}/${data.maxPlayers})</p><div class="room-spinner"></div><button id="qm-cancel-wait" class="room-btn secondary">Cancelar</button>`;
+          document.getElementById('qm-cancel-wait').addEventListener('click', cancelQuickWait);
+        }
+        return;
+      }
+
+      if (data.status === 'jugando' && !quickMatch) {
+        if (qmFlow && qmFlow.matchId === matchId && !qmFlow.countdownTimer && data.startAt) {
+          roomModalBody.innerHTML = `<p class="room-status-line">¡Sala completa! (${data.playerCount}/${data.maxPlayers} jugadores)</p><p class="room-status-line" id="qm-countdown-val">…</p>`;
+          const tick = () => {
+            if (!qmFlow) return;
+            const remaining = data.startAt - Date.now();
+            const el = document.getElementById('qm-countdown-val');
+            if (remaining <= 0) {
+              if (el) el.textContent = '¡YA!';
+              beginQuickMatchRound(matchId, uid, mode, data);
+              return;
+            }
+            if (el) el.textContent = Math.ceil(remaining / 1000) + '…';
+            qmFlow.countdownTimer = setTimeout(tick, 120);
+          };
+          tick();
+        }
+        return;
+      }
+
+      if (quickMatch && quickMatch.matchId === matchId) {
+        applyQuickMatchUpdate(data);
+      }
+    }
+
+    function beginQuickMatchRound(matchId, uid, mode, data) {
+      if (qmFlow && qmFlow.countdownTimer) clearTimeout(qmFlow.countdownTimer);
+      const maxPlayers = data.maxPlayers;
+      quickMatch = {
+        matchId, uid, mode, maxPlayers,
+        unsub: qmFlow ? qmFlow.unsub : null,
+        lastBroadcast: 0, heartbeatTimer: null, staleCheckTimer: null,
+        opponents: {}, resultShown: false
+      };
+      qmFlow = null;
+      roomModal.classList.add('hidden');
+      updateControlsHint();
+
+      qmOpponentsEl.innerHTML = '';
+      Object.keys(data.players || {}).forEach((id) => {
+        if (id === uid) return;
+        const p = data.players[id];
+        quickMatch.opponents[id] = {
+          name: p.name, prevX: 0, prevY: 0, nextX: 0, nextY: 0, curX: 0, curY: 0,
+          since: performance.now(), action: 'idle',
+          score: 0, lives: START_LIVES, finished: false, finalScore: 0,
+          lastSeen: Date.now(), disconnected: false
+        };
+        qmCreateOpponentRow(id, p.name);
+      });
+      qmHud.classList.add('show');
+
+      qmStartHeartbeat();
+      resetGame();
+    }
+
+    function qmCreateOpponentRow(id, name) {
+      const row = document.createElement('div');
+      row.className = 'qm-row';
+      row.innerHTML = `
+        <span class="qm-avatar" id="qm-avatar-${id}">🧍</span>
+        <span class="qm-name">${escapeHtml(name)}</span>
+        <span class="qm-stat">⭐ <span id="qm-score-${id}">0</span></span>
+        <span class="qm-stat">❤️ <span id="qm-lives-${id}">${START_LIVES}</span></span>
+        <span class="qm-status" id="qm-status-${id}"></span>
+      `;
+      qmOpponentsEl.appendChild(row);
+    }
+
+    // Se llama en cada snapshot: actualiza el objetivo de interpolación,
+    // los marcadores y detecta cuándo todos terminaron para mostrar el resultado.
+    function applyQuickMatchUpdate(data) {
+      const players = data.players || {};
+      let allDone = true;
+
+      Object.keys(quickMatch.opponents).forEach((id) => {
+        const remote = players[id];
+        const local = quickMatch.opponents[id];
+        if (!remote) {
+          // El rival fue removido de la sala (se limpió por abandono/desconexión)
+          local.finished = true;
+          local.disconnected = true;
+          const statusEl = document.getElementById(`qm-status-${id}`);
+          if (statusEl) statusEl.textContent = '🔌';
+          return;
+        }
+        if (remote.x !== local.nextX || remote.y !== local.nextY) {
+          local.prevX = local.curX; local.prevY = local.curY;
+          local.nextX = remote.x; local.nextY = remote.y;
+          local.since = performance.now();
+        }
+        local.action = remote.action || 'idle';
+        local.score = remote.finished ? (remote.finalScore || 0) : (remote.score || 0);
+        local.lives = Math.max(0, remote.finished ? 0 : (remote.lives ?? START_LIVES));
+        local.finished = !!remote.finished;
+        local.finalScore = remote.finalScore || 0;
+        if (remote.lastSeen) local.lastSeen = remote.lastSeen;
+
+        const scoreEl = document.getElementById(`qm-score-${id}`);
+        const livesEl = document.getElementById(`qm-lives-${id}`);
+        const statusEl = document.getElementById(`qm-status-${id}`);
+        if (scoreEl) scoreEl.textContent = local.score;
+        if (livesEl) livesEl.textContent = local.lives;
+        if (statusEl) statusEl.textContent = local.finished ? '☠️' : '';
+
+        if (!local.finished) allDone = false;
+      });
+
+      const me = players[quickMatch.uid];
+      const myFinished = me ? !!me.finished : false;
+
+      if (myFinished && allDone && !quickMatch.resultShown) {
+        quickMatch.resultShown = true;
+        showQuickMatchResult(data);
+      } else if (myFinished && !allDone) {
+        statusMsg.textContent = 'ESPERANDO AL RESTO…';
+      }
+    }
+
+    // Transmite mi posición/acción a tick rate limitado (no cada frame).
+    // Se llama desde el loop principal del juego; internamente se
+    // autolimita a QM_TICK_MS entre envíos.
+    function mpBroadcastFrame(time) {
+      if (!quickMatch || gameState !== 'PLAYING') return;
+      if (time - quickMatch.lastBroadcast < QM_TICK_MS) return;
+      quickMatch.lastBroadcast = time;
+
+      const action = (clock - lastShotAt) < SHOT_POSE_DURATION ? 'shoot'
+        : (!player.grounded ? 'jump' : ((keys.left || keys.right) ? 'run' : 'idle'));
+
+      window.firebaseReady.then(fb => {
+        if (!quickMatch) return;
+        const uid = quickMatch.uid;
+        fb.updateDoc(fb.doc(fb.db, 'matches', quickMatch.matchId), {
+          [`players.${uid}.x`]: Math.round(player.x),
+          [`players.${uid}.y`]: Math.round(player.y),
+          [`players.${uid}.facing`]: player.facing,
+          [`players.${uid}.grounded`]: player.grounded,
+          [`players.${uid}.action`]: action,
+          [`players.${uid}.score`]: score,
+          [`players.${uid}.lives`]: lives
+        }).catch(() => {});
+      });
+    }
+
+    // Interpolación lineal en cliente: se llama cada frame (rAF) para que
+    // el avatar de cada rival se mueva fluido en el HUD aunque los datos
+    // de Firestore lleguen solo ~12 veces por segundo.
+    function qmUpdateInterpolation(nowMs) {
+      if (!quickMatch) return;
+      Object.keys(quickMatch.opponents).forEach((id) => {
+        const o = quickMatch.opponents[id];
+        if (o.disconnected) return;
+        const t = Math.min(1, (nowMs - o.since) / QM_INTERP_MS);
+        o.curX = o.prevX + (o.nextX - o.prevX) * t;
+        o.curY = o.prevY + (o.nextY - o.prevY) * t;
+        const avatarEl = document.getElementById(`qm-avatar-${id}`);
+        if (!avatarEl) return;
+        const bounce = o.action === 'jump' ? -6 : 0;
+        avatarEl.style.transform = `translateY(${bounce}px) scaleX(${o.action === 'shoot' ? 1.15 : 1})`;
+        avatarEl.textContent = o.action === 'jump' ? '🦘' : (o.action === 'shoot' ? '🔫' : (o.action === 'run' ? '🏃' : '🧍'));
+      });
+    }
+
+    function qmStartHeartbeat() {
+      qmSendHeartbeat();
+      quickMatch.heartbeatTimer = setInterval(qmSendHeartbeat, QM_HEARTBEAT_MS);
+      quickMatch.staleCheckTimer = setInterval(qmCheckStaleOpponents, QM_HEARTBEAT_MS);
+    }
+
+    function qmSendHeartbeat() {
+      if (!quickMatch) return;
+      window.firebaseReady.then(fb => {
+        if (!quickMatch) return;
+        fb.updateDoc(fb.doc(fb.db, 'matches', quickMatch.matchId), {
+          [`players.${quickMatch.uid}.lastSeen`]: Date.now()
+        }).catch(() => {});
+      });
+    }
+
+    // Si un rival deja de mandar heartbeat por QM_STALE_MS, se considera
+    // desconectado: cualquier cliente presente lo saca de la sala (o la
+    // borra si queda vacía), para no dejar salas fantasma.
+    function qmCheckStaleOpponents() {
+      if (!quickMatch) return;
+      const now = Date.now();
+      Object.keys(quickMatch.opponents).forEach((id) => {
+        const o = quickMatch.opponents[id];
+        if (o.disconnected || o.finished) return;
+        if (now - o.lastSeen > QM_STALE_MS) {
+          o.disconnected = true;
+          const statusEl = document.getElementById(`qm-status-${id}`);
+          if (statusEl) statusEl.textContent = '🔌 Desconectado';
+          qmRemoveStalePlayer(id);
+        }
+      });
+    }
+
+    async function qmRemoveStalePlayer(id) {
+      const fb = await window.firebaseReady;
+      const ref = fb.doc(fb.db, 'matches', quickMatch.matchId);
+      try {
+        await fb.runTransaction(fb.db, async (tx) => {
+          const snap = await tx.get(ref);
+          if (!snap.exists()) return;
+          const data = snap.data();
+          if (!data.players || !data.players[id]) return;
+          const newCount = Math.max(0, (data.playerCount || 1) - 1);
+          if (newCount <= 0) { tx.delete(ref); return; }
+          tx.update(ref, {
+            [`players.${id}`]: fb.deleteField(),
+            playerOrder: (data.playerOrder || []).filter(x => x !== id),
+            playerCount: newCount
+          });
+        });
+      } catch (e) { /* si otro cliente ya limpió, se ignora */ }
+    }
+
+    function qmReportFinished() {
+      if (!quickMatch) return;
+      window.firebaseReady.then(fb => {
+        if (!quickMatch) return;
+        fb.updateDoc(fb.doc(fb.db, 'matches', quickMatch.matchId), {
+          [`players.${quickMatch.uid}.finished`]: true,
+          [`players.${quickMatch.uid}.finalScore`]: score,
+          [`players.${quickMatch.uid}.finalTime`]: elapsedTime,
+          [`players.${quickMatch.uid}.score`]: score,
+          [`players.${quickMatch.uid}.lives`]: 0
+        }).catch(() => {});
+      });
+      statusMsg.textContent = 'ESPERANDO AL RESTO…';
+    }
+
+    function showQuickMatchResult(data) {
+      const players = data.players || {};
+      const uid = quickMatch.uid;
+      const rows = Object.keys(players).map(id => ({
+        id, isMe: id === uid,
+        name: id === uid ? 'TÚ' : (players[id].name || 'Jugador'),
+        finalScore: players[id].finished ? (players[id].finalScore || 0) : (players[id].score || 0)
+      })).sort((a, b) => b.finalScore - a.finalScore);
+
+      const myRank = rows.findIndex(r => r.isMe) + 1;
+      let verdict, color;
+      if (myRank === 1) { verdict = '🏆 ¡GANASTE!'; color = '#34d399'; }
+      else if (rows.length <= 2) { verdict = '💀 PERDISTE'; color = '#f87171'; }
+      else { verdict = `#${myRank} DE ${rows.length}`; color = '#fbbf24'; }
+
+      finalScoreWrap.style.display = 'none';
+      mpResultEl.style.display = 'block';
+      mpResultEl.innerHTML = `
+        <span class="final-score-label" style="color:${color};">${verdict}</span>
+        ${rows.map(r => `<div class="vs-row" style="margin-top:6px;"><span class="vs-name">${r.isMe ? '<b>TÚ</b>' : escapeHtml(r.name)}: <b>${r.finalScore}</b></span></div>`).join('')}
+      `;
+      statusMsg.textContent = 'GAME OVER';
+    }
+
+    function leaveQuickMatch() {
+      if (quickMatch) {
+        if (quickMatch.unsub) quickMatch.unsub();
+        if (quickMatch.heartbeatTimer) clearInterval(quickMatch.heartbeatTimer);
+        if (quickMatch.staleCheckTimer) clearInterval(quickMatch.staleCheckTimer);
+        const matchId = quickMatch.matchId, uid = quickMatch.uid;
+        window.firebaseReady.then(fb => qmLeaveDoc(fb, matchId, uid));
+        quickMatch = null;
+      }
+      teardownQuickFlow();
+      qmHud.classList.remove('show');
+      qmOpponentsEl.innerHTML = '';
+    }
+
+    // Saca a `uid` de la sala `matchId` (o borra la sala si queda vacía).
+    // "Best-effort": si la pestaña se cierra de golpe puede no llegar a
+    // completarse; por eso también existe la limpieza por heartbeat.
+    async function qmLeaveDoc(fb, matchId, uid) {
+      if (!matchId || !uid) return;
+      const ref = fb.doc(fb.db, 'matches', matchId);
+      try {
+        await fb.runTransaction(fb.db, async (tx) => {
+          const snap = await tx.get(ref);
+          if (!snap.exists()) return;
+          const data = snap.data();
+          if (!data.players || !data.players[uid]) return;
+          const newCount = Math.max(0, (data.playerCount || 1) - 1);
+          if (newCount <= 0) { tx.delete(ref); return; }
+          tx.update(ref, {
+            [`players.${uid}`]: fb.deleteField(),
+            playerOrder: (data.playerOrder || []).filter(x => x !== uid),
+            playerCount: newCount
+          });
+        });
+      } catch (e) { /* ignorar: la limpieza por timeout lo cubrirá */ }
+    }
+
+    window.addEventListener('pagehide', () => { if (quickMatch || qmFlow) leaveQuickMatch(); });
+    window.addEventListener('beforeunload', () => { if (quickMatch || qmFlow) leaveQuickMatch(); });
 
     // El máximo de bolas simultáneas crece con el nivel (empieza escaso, termina intenso)
     // -- Reducido para que el juego sea menos difícil --
@@ -3555,8 +3218,6 @@
         hoverDur: 1000,
         beamPts: null,
         beamAlpha: 0,
-        beamPts2: null,
-        beamAlpha2: 0,
         volleyStart: null,
         volleyDur: 6000,
         // --- Deriva lateral durante la andanada (solo modo 'duo'): el OVNI no
@@ -3589,22 +3250,13 @@
     }
 
     function ufoFire(u) {
-      // --- En Modo Equipo, el OVNI dispara un rayo a CADA jugador al mismo
-      // tiempo (dos rayos simultáneos desde el mismo platillo). Fuera de Modo
-      // Equipo, dispara un único rayo al único jugador. ---
-      if (teamMode) {
-        fireBeamAt(u, player, 'beamPts', 'beamAlpha');
-        fireBeamAt(u, player2, 'beamPts2', 'beamAlpha2');
-        return;
-      }
       fireBeamAt(u, player, 'beamPts', 'beamAlpha');
     }
 
-    // --- Dispara un rayo de un OVNI hacia un jugador específico, guardando su
-    // trayectoria/opacidad en las propiedades indicadas (ptsKey/alphaKey), lo
-    // que permite que un mismo OVNI tenga dos rayos simultáneos en Modo Equipo. ---
+    // --- Dispara un rayo de un OVNI hacia el jugador, guardando su
+    // trayectoria/opacidad en las propiedades indicadas (ptsKey/alphaKey). ---
     function fireBeamAt(u, target, ptsKey, alphaKey) {
-      const playerMoving = target === player ? (keys.left || keys.right) : (keys2.left || keys2.right);
+      const playerMoving = keys.left || keys.right;
       const missed = playerMoving && Math.random() < 0.10;
       let aimX = target.x;
       const aimY = target.y - target.height / 2;
@@ -3626,7 +3278,6 @@
       } else {
         vibrateDevice(target.invincible ? [30] : [60, 40, 60]);
         if (!target.invincible) {
-          if (target === player2) { player2.invincible = true; player2.invincibleUntil = clock + 1600; }
           loseLife();
         }
       }
@@ -3704,10 +3355,8 @@
       } else if (u.state === 'fire') {
         if (u.mode === 'duo') wanderUfo(u);
         u.beamAlpha -= 0.07;
-        u.beamAlpha2 -= 0.07;
         if (clock - u.stateStart > 260) {
           u.beamPts = null;
-          u.beamPts2 = null;
           // --- Modo dúo: repite disparos hasta cumplir 6 segundos de andanada ---
           if (u.mode === 'duo' && clock - u.volleyStart < u.volleyDur) {
             u.state = 'hover';
@@ -3771,7 +3420,7 @@
       }
       ctx.restore();
 
-      // Rayo eléctrico (hacia el Jugador 1, o único jugador si no es Modo Equipo)
+      // Rayo eléctrico hacia el jugador
       if (u.beamPts && u.beamAlpha > 0) {
         ctx.save();
         ctx.globalCompositeOperation = 'lighter';
@@ -3782,21 +3431,6 @@
         u.beamPts.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
         ctx.stroke();
         ctx.strokeStyle = `rgba(240,249,255,${u.beamAlpha})`;
-        ctx.lineWidth = 2.6;
-        ctx.stroke();
-        ctx.restore();
-      }
-      // Segundo rayo simultáneo hacia el Jugador 2 (Modo Equipo: el OVNI ataca a ambos a la vez)
-      if (u.beamPts2 && u.beamAlpha2 > 0) {
-        ctx.save();
-        ctx.globalCompositeOperation = 'lighter';
-        ctx.strokeStyle = `rgba(96,165,250,${u.beamAlpha2 * 0.55})`;
-        ctx.lineWidth = 7;
-        ctx.lineJoin = 'round';
-        ctx.beginPath();
-        u.beamPts2.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
-        ctx.stroke();
-        ctx.strokeStyle = `rgba(240,249,255,${u.beamAlpha2})`;
         ctx.lineWidth = 2.6;
         ctx.stroke();
         ctx.restore();
@@ -4016,66 +3650,6 @@
         if (player.trail[i].life <= 0) player.trail.splice(i, 1);
       }
 
-      // --- Jugador 2 (Modo Supervivencia en Equipo): misma física que el
-      // Jugador 1, pero controlado con `keys2` y sin arma ni disparo. ---
-      if (teamMode) {
-        if (player2.invincible && clock > player2.invincibleUntil) { player2.invincible = false; player2.shieldActive = false; }
-
-        const moving2 = keys2.left || keys2.right;
-        if (keys2.left) { player2.vx = -player2.speed; player2.facing = -1; }
-        else if (keys2.right) { player2.vx = player2.speed; player2.facing = 1; }
-        else player2.vx = 0;
-
-        player2.x += player2.vx;
-        player2.vy += player2.gravity;
-        player2.y += player2.vy;
-
-        if (player2.x < player2.width / 2) player2.x = player2.width / 2;
-        if (player2.x > cssW - player2.width / 2) player2.x = cssW - player2.width / 2;
-
-        const wasGrounded2 = player2.grounded;
-        if (player2.y > groundLevel) {
-          player2.y = groundLevel;
-          if (!wasGrounded2 && player2.vy > 4) {
-            player2.squash = 0.62;
-            player2.landing = true;
-            player2.landStart = clock;
-            for (let i = 0; i < 6; i++) {
-              particles.push({ x: player2.x, y: groundLevel, vx: (Math.random() - 0.5) * 2.4, vy: -Math.random() * 2.2, life: 1, color: '#fde68a' });
-            }
-          }
-          player2.vy = 0;
-          player2.grounded = true;
-        } else {
-          player2.grounded = false;
-        }
-
-        if (player2.landing) {
-          const t2 = Ease.clamp01((clock - player2.landStart) / 420);
-          player2.squash = 0.62 + (1 - 0.62) * Ease.outElastic(t2);
-          if (t2 >= 1) player2.landing = false;
-        } else {
-          let target2;
-          if (!player2.grounded) target2 = player2.vy < -1 ? 1.18 : 0.9;
-          else if (moving2) target2 = 1 + Math.sin(player2.walkPhase * 2) * 0.035;
-          else target2 = 1 + Math.sin(clock * 0.0025) * 0.018;
-          player2.squash += (target2 - player2.squash) * 0.16;
-        }
-
-        if (player2.grounded && moving2) {
-          player2.walkPhase += Math.abs(player2.vx) * 0.22;
-        }
-        player2.corePulse += dt * 0.006;
-
-        if (moving2 && player2.grounded && !reduceMotion) {
-          player2.trail.push({ x: player2.x, y: player2.y, life: 1 });
-        }
-        for (let i = player2.trail.length - 1; i >= 0; i--) {
-          player2.trail[i].life -= 0.06;
-          if (player2.trail[i].life <= 0) player2.trail.splice(i, 1);
-        }
-      }
-
       spawnObstacle();
       for (let i = obstacles.length - 1; i >= 0; i--) {
         let obs = obstacles[i];
@@ -4099,17 +3673,8 @@
         const distance = Math.sqrt(dx * dx + dy * dy);
         const hitP1 = distance < player.radius + obs.radius - 3 && !player.invincible;
 
-        let hitP2 = false;
-        if (teamMode) {
-          const dx2 = player2.x - obs.x;
-          const dy2 = (player2.y - player2.height / 2) - obs.y;
-          const distance2 = Math.sqrt(dx2 * dx2 + dy2 * dy2);
-          hitP2 = distance2 < player2.radius + obs.radius - 3 && !player2.invincible;
-        }
-
-        if (hitP1 || hitP2) {
+        if (hitP1) {
           obstacles.splice(i, 1);
-          if (hitP2) { player2.invincible = true; player2.invincibleUntil = clock + 1600; }
           loseLife();
           continue;
         }
@@ -4128,11 +3693,6 @@
         const distance = Math.sqrt(dx * dx + dy * dy);
 
         let collected = distance < player.radius + h.radius;
-        if (!collected && teamMode) {
-          const dx2 = player2.x - h.x;
-          const dy2 = (player2.y - player2.height / 2) - h.y;
-          collected = Math.sqrt(dx2 * dx2 + dy2 * dy2) < player2.radius + h.radius;
-        }
 
         if (collected) {
           heartPickups.splice(i, 1);
@@ -4763,209 +4323,6 @@
       ctx.restore();
     }
 
-    function drawPlayer2(time) {
-      ctx.save();
-      ctx.globalCompositeOperation = 'lighter';
-      player2.trail.forEach(t => {
-        ctx.globalAlpha = t.life * 0.35;
-        ctx.fillStyle = '#f59e0b';
-        ctx.beginPath();
-        ctx.arc(t.x, t.y - player2.height / 2, 5, 0, Math.PI * 2);
-        ctx.fill();
-      });
-      ctx.restore();
-
-      const px = player2.x, py = player2.y;
-      const squash = player2.squash;
-      const airborne = !player2.grounded;
-      const isShooting = false; // el Jugador 2 no dispara en Modo Equipo
-
-      ctx.save();
-      ctx.translate(px, py);
-      ctx.scale(player2.facing, 1);
-      ctx.scale(1 / squash, squash);
-      if (player2.invincible) {
-        ctx.globalAlpha = 0.35 + 0.65 * Math.abs(Math.sin(clock * 0.02));
-      }
-
-      ctx.strokeStyle = '#fde68a';
-      ctx.fillStyle = '#fde68a';
-      ctx.lineWidth = 2.4;
-      ctx.lineCap = 'round';
-
-      const isMoving = (keys2.left || keys2.right) && player2.grounded;
-      const legSwing = airborne ? 0.5 : (isMoving ? Math.sin(player2.walkPhase) * 0.95 : 0);
-      const legSwing2 = airborne ? -0.4 : (isMoving ? Math.sin(player2.walkPhase + Math.PI) * 0.95 : 0);
-      const armSwing = airborne ? -0.6 : (isMoving ? Math.sin(player2.walkPhase + Math.PI) * 0.95 : Math.sin(clock * 0.0025) * 0.08);
-      const armSwing2 = airborne ? 0.9 : (isMoving ? Math.sin(player2.walkPhase) * 0.95 : Math.sin(clock * 0.0025 + Math.PI) * 0.08);
-
-      const hipY = -12;
-      const shoulderY = -22;
-      const headY = -30;
-      const strideLift = isMoving ? 1 : 0;
-
-      // --- Anticipación de aterrizaje: mientras cae, calcula qué tan cerca
-      // está del suelo para empezar a extender las piernas ANTES de tocarlo,
-      // en vez de mantenerlas dobladas hasta el instante del impacto. ---
-      const groundLevel = cssH - groundOffset();
-      const distToGround = groundLevel - py;
-      const landPrep = (airborne && player2.vy > 0)
-        ? Ease.clamp01(1 - distToGround / 55)
-        : 0;
-
-      // Piernas (dos segmentos con articulación, con levantamiento de rodilla al correr).
-      // En el aire, el personaje dobla ambas piernas hacia arriba (rodillas al pecho),
-      // como una pose de salto compacta, en vez de mantenerlas semi-extendidas.
-      if (airborne) {
-        [-1, 1].forEach((side) => {
-          // Pose doblada (en el aire, lejos del suelo)
-          const tuckKneeX = side * 5, tuckKneeY = hipY - 4;
-          const tuckFootX = side * 2.5, tuckFootY = hipY + 2;
-          // Pose extendida (a punto de aterrizar, piernas listas para el impacto)
-          const landKneeX = side * 4, landKneeY = hipY + 5;
-          const landFootX = side * 3, landFootY = hipY + 13;
-          const kneeX = tuckKneeX + (landKneeX - tuckKneeX) * landPrep;
-          const kneeY = tuckKneeY + (landKneeY - tuckKneeY) * landPrep;
-          const footX = tuckFootX + (landFootX - tuckFootX) * landPrep;
-          const footY = tuckFootY + (landFootY - tuckFootY) * landPrep;
-          ctx.beginPath();
-          ctx.moveTo(0, hipY);
-          ctx.lineTo(kneeX, kneeY);
-          ctx.lineTo(footX, footY);
-          ctx.stroke();
-        });
-      } else {
-        [legSwing, legSwing2].forEach((ang) => {
-          const kneeLift = strideLift * Math.max(0, Math.sin(ang)) * 4;
-          const kneeX = Math.sin(ang) * 8;
-          const kneeY = hipY + 7 - kneeLift;
-          const footX = kneeX + Math.sin(ang * 0.6) * 6;
-          const footY = hipY + 14 - kneeLift * 0.3;
-          ctx.beginPath();
-          ctx.moveTo(0, hipY);
-          ctx.lineTo(kneeX, kneeY);
-          ctx.lineTo(footX, footY);
-          ctx.stroke();
-        });
-      }
-
-      // Cuerpo (torso ligeramente cónico)
-      ctx.beginPath();
-      ctx.moveTo(0, hipY);
-      ctx.lineTo(0, shoulderY);
-      ctx.stroke();
-
-      // Brazos (con codo doblado, balanceo amplio hacia adelante y atrás al correr).
-      // Al disparar, el brazo delantero se levanta recto hacia arriba (apuntando),
-      // mientras el otro brazo baja hacia atrás para dar equilibrio a la pose.
-      if (isShooting) {
-        const raiseT = Ease.clamp01(1 - (clock - lastShotAt) / SHOT_POSE_DURATION);
-        const shootElbowX = 3 * raiseT, shootElbowY = shoulderY - 7 * raiseT;
-        const shootHandX = 4 * raiseT, shootHandY = shoulderY - 17 * raiseT;
-        ctx.beginPath();
-        ctx.moveTo(0, shoulderY + 1);
-        ctx.lineTo(shootElbowX, shootElbowY);
-        ctx.lineTo(shootHandX, shootHandY);
-        ctx.stroke();
-
-        const backElbowX = -7 * raiseT, backElbowY = shoulderY + 4 + 2 * raiseT;
-        const backHandX = -9 * raiseT, backHandY = shoulderY + 9 + 3 * raiseT;
-        ctx.beginPath();
-        ctx.moveTo(0, shoulderY + 1);
-        ctx.lineTo(backElbowX, backElbowY);
-        ctx.lineTo(backHandX, backHandY);
-        ctx.stroke();
-      } else {
-        [armSwing, armSwing2].forEach((ang) => {
-          const elbowX = Math.sin(ang) * 9;
-          const elbowY = shoulderY + 6 - Math.max(0, Math.cos(ang)) * 2;
-          const handX = elbowX + Math.sin(ang * 1.15 - 0.5) * 7;
-          const handY = shoulderY + 11 - Math.max(0, -Math.sin(ang)) * 3;
-          ctx.beginPath();
-          ctx.moveTo(0, shoulderY + 1);
-          ctx.lineTo(elbowX, elbowY);
-          ctx.lineTo(handX, handY);
-          ctx.stroke();
-        });
-      }
-
-      // Núcleo de energía en el pecho
-      const coreGlow = 0.6 + Math.sin(player2.corePulse * 8) * 0.25;
-      ctx.save();
-      ctx.globalCompositeOperation = 'lighter';
-      const coreGrad = ctx.createRadialGradient(0, shoulderY + 8, 0, 0, shoulderY + 8, 7);
-      coreGrad.addColorStop(0, `rgba(253,230,138,${coreGlow})`);
-      coreGrad.addColorStop(1, 'rgba(59,130,246,0)');
-      ctx.fillStyle = coreGrad;
-      ctx.beginPath();
-      ctx.arc(0, shoulderY + 8, 7, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
-      ctx.fillStyle = '#fef3c7';
-      ctx.beginPath();
-      ctx.arc(0, shoulderY + 8, 2, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Cabeza con visor. Al disparar, se inclina hacia atrás para mirar hacia
-      // arriba, siguiendo la trayectoria del disparo.
-      ctx.save();
-      ctx.translate(0, headY);
-      if (isShooting) {
-        const tiltT = Ease.clamp01(1 - (clock - lastShotAt) / SHOT_POSE_DURATION);
-        ctx.rotate(-1.4 * tiltT);
-      }
-      ctx.beginPath();
-      ctx.arc(0, 0, 6.5, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.save();
-      ctx.strokeStyle = '#f59e0b';
-      ctx.lineWidth = 1.6;
-      ctx.beginPath();
-      ctx.arc(1, 0, 3.2, -0.6, 1.2);
-      ctx.stroke();
-      ctx.restore();
-      ctx.restore();
-
-      // Capa / bufanda dinámica según velocidad y viento
-      const capeSway = Math.sin(time * 0.006) * 4 + player2.vx * -1.4;
-      ctx.strokeStyle = 'rgba(245,158,11,0.85)';
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.moveTo(-1, shoulderY + 2);
-      ctx.quadraticCurveTo(-8 + capeSway * 0.4, shoulderY + 10, -6 + capeSway, hipY + 6);
-      ctx.stroke();
-
-      // --- Escudo de inmunidad (súper poder al subir de nivel): anillo de energía pulsante ---
-      if (player2.shieldActive) {
-        const shieldCenterY = (headY + hipY) / 2 + 2;
-        const shieldR = 22 + Math.sin(clock * 0.012) * 2;
-        const pulse = 0.55 + 0.45 * Math.abs(Math.sin(clock * 0.01));
-        ctx.save();
-        ctx.globalCompositeOperation = 'lighter';
-        const shieldGrad = ctx.createRadialGradient(0, shieldCenterY, shieldR * 0.6, 0, shieldCenterY, shieldR);
-        shieldGrad.addColorStop(0, 'rgba(103,232,249,0)');
-        shieldGrad.addColorStop(0.75, `rgba(34,211,238,${0.18 * pulse})`);
-        shieldGrad.addColorStop(1, 'rgba(34,211,238,0)');
-        ctx.fillStyle = shieldGrad;
-        ctx.beginPath();
-        ctx.arc(0, shieldCenterY, shieldR, 0, Math.PI * 2);
-        ctx.fill();
-
-        ctx.strokeStyle = `rgba(103,232,249,${0.75 * pulse})`;
-        ctx.lineWidth = 1.8;
-        ctx.beginPath();
-        ctx.arc(0, shieldCenterY, shieldR, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.strokeStyle = `rgba(224,242,254,${0.9 * pulse})`;
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.arc(0, shieldCenterY, shieldR - 3, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.restore();
-      }
-
-      ctx.restore();
-    }
 
 
     // Relámpago lejano de ambiente: un resplandor suave y silencioso en el fondo
@@ -5008,6 +4365,7 @@
       updateRain(dt);
       mpThrottledSync(time);
       mpBroadcastFrame(time);
+      qmUpdateInterpolation(time);
 
       ctx.save();
       ctx.clearRect(0, 0, cssW, cssH);
@@ -5028,7 +4386,6 @@
       drawRain();
       drawParticles();
       if (player.grounded !== undefined) drawPlayer(time);
-      if (teamMode) drawPlayer2(time);
 
       ctx.restore();
 
