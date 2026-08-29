@@ -2763,7 +2763,13 @@
         flag: (currentUser && currentUser.flag) || '🏳️',
         score: 0, lives: START_LIVES,
         finished: false, finalScore: 0, finalTime: 0,
-        x: 0, y: 0, vx: 0, facing: 1, grounded: true, action: 'idle',
+        // Posición normalizada como fracción del canvas (0..1), NO en
+        // píxeles crudos. Cada jugador puede tener una pantalla de ancho/alto
+        // distinto (celular vs. escritorio); transmitir una fracción del
+        // propio canvas y multiplicarla por el canvas del receptor es lo que
+        // permite dibujar al rival en la posición correcta dentro del MISMO
+        // mapa, sin importar el tamaño de pantalla de cada uno.
+        xFrac: 0.5, yFrac: 0.85, facing: 1, grounded: true, action: 'idle',
         lastSeen: Date.now()
       };
     }
@@ -2944,7 +2950,13 @@
         if (id === uid) return;
         const p = data.players[id];
         quickMatch.opponents[id] = {
-          name: p.name, prevX: 0, prevY: 0, nextX: 0, nextY: 0, curX: 0, curY: 0,
+          name: p.name,
+          // prevXFrac/nextXFrac: fracción (0..1) del canvas del RIVAL, usada
+          // para interpolar. curX/curY: ya convertidas a píxeles de ESTE
+          // canvas (se recalculan en cada frame en qmUpdateInterpolation,
+          // porque cssW/cssH pueden cambiar si el usuario rota o redimensiona).
+          prevXFrac: 0.5, prevYFrac: 0.85, nextXFrac: 0.5, nextYFrac: 0.85,
+          curX: 0, curY: 0, facing: 1,
           since: performance.now(), action: 'idle',
           score: 0, lives: START_LIVES, finished: false, finalScore: 0,
           lastSeen: Date.now(), disconnected: false
@@ -2996,12 +3008,19 @@
           if (statusEl) statusEl.textContent = '🔌';
           return;
         }
-        if (remote.x !== local.nextX || remote.y !== local.nextY) {
-          local.prevX = local.curX; local.prevY = local.curY;
-          local.nextX = remote.x; local.nextY = remote.y;
+        if (remote.xFrac !== local.nextXFrac || remote.yFrac !== local.nextYFrac) {
+          // Arranca la interpolación desde donde el rival se ve AHORA en
+          // pantalla (curXFrac/curYFrac), no desde el destino anterior, para
+          // que no haya un salto brusco si llega un paquete nuevo antes de
+          // terminar de interpolar el anterior.
+          local.prevXFrac = (typeof local.curXFrac === 'number') ? local.curXFrac : local.nextXFrac;
+          local.prevYFrac = (typeof local.curYFrac === 'number') ? local.curYFrac : local.nextYFrac;
+          local.nextXFrac = (typeof remote.xFrac === 'number') ? remote.xFrac : local.nextXFrac;
+          local.nextYFrac = (typeof remote.yFrac === 'number') ? remote.yFrac : local.nextYFrac;
           local.since = performance.now();
         }
         local.action = remote.action || 'idle';
+        local.facing = remote.facing || 1;
         local.score = remote.finished ? (remote.finalScore || 0) : (remote.score || 0);
         local.lives = Math.max(0, remote.finished ? 0 : (remote.lives ?? START_LIVES));
         local.finished = !!remote.finished;
@@ -3044,8 +3063,12 @@
         if (!quickMatch) return;
         const uid = quickMatch.uid;
         fb.updateDoc(fb.doc(fb.db, 'matches', quickMatch.matchId), {
-          [`players.${uid}.x`]: Math.round(player.x),
-          [`players.${uid}.y`]: Math.round(player.y),
+          // Se transmite como FRACCIÓN del propio canvas (0..1), no en
+          // píxeles crudos, para que el receptor pueda ubicar al rival en
+          // la posición correcta de SU PROPIO canvas aunque tenga una
+          // pantalla de otro tamaño (ver qmNewPlayerState / drawOpponentPlayer).
+          [`players.${uid}.xFrac`]: +(player.x / cssW).toFixed(4),
+          [`players.${uid}.yFrac`]: +(player.y / cssH).toFixed(4),
           [`players.${uid}.facing`]: player.facing,
           [`players.${uid}.grounded`]: player.grounded,
           [`players.${uid}.action`]: action,
@@ -3056,16 +3079,21 @@
     }
 
     // Interpolación lineal en cliente: se llama cada frame (rAF) para que
-    // el avatar de cada rival se mueva fluido en el HUD aunque los datos
-    // de Firestore lleguen solo ~12 veces por segundo.
+    // el rival se mueva fluido (en el HUD y, en MODO_SURVIVAL, dentro del
+    // canvas compartido) aunque los datos de Firestore lleguen solo ~12
+    // veces por segundo. Interpola en FRACCIÓN (0..1) y recién al final
+    // convierte a píxeles con el cssW/cssH de ESTE dispositivo, para que
+    // la posición se vea correcta sin importar el tamaño de cada pantalla.
     function qmUpdateInterpolation(nowMs) {
       if (!quickMatch) return;
       Object.keys(quickMatch.opponents).forEach((id) => {
         const o = quickMatch.opponents[id];
         if (o.disconnected) return;
         const t = Math.min(1, (nowMs - o.since) / QM_INTERP_MS);
-        o.curX = o.prevX + (o.nextX - o.prevX) * t;
-        o.curY = o.prevY + (o.nextY - o.prevY) * t;
+        o.curXFrac = o.prevXFrac + (o.nextXFrac - o.prevXFrac) * t;
+        o.curYFrac = o.prevYFrac + (o.nextYFrac - o.prevYFrac) * t;
+        o.curX = o.curXFrac * cssW;
+        o.curY = o.curYFrac * cssH;
         const avatarEl = document.getElementById(`qm-avatar-${id}`);
         if (!avatarEl) return;
         const bounce = o.action === 'jump' ? -6 : 0;
@@ -4169,6 +4197,85 @@
       ctx.restore();
     }
 
+    // Dibuja al rival DENTRO del mismo canvas (MODO_SURVIVAL), en su
+    // posición interpolada (o.curX/o.curY, ya convertidas a píxeles de
+    // ESTE dispositivo por qmUpdateInterpolation). No replica el detalle
+    // de animación del jugador local (squash, trail, walkPhase) porque eso
+    // no se transmite por red -por diseño, para no saturar Firestore-,
+    // solo x/y/facing/action; alcanza para verse como un personaje
+    // reconocible y en la posición correcta del mundo compartido.
+    function drawOpponentPlayer(o, time) {
+      if (o.disconnected) return;
+      const px = o.curX, py = o.curY;
+      const facing = o.facing || 1;
+      const airborne = o.action === 'jump';
+      const isMoving = o.action === 'run';
+      const isShooting = o.action === 'shoot';
+      const walkPhase = time * 0.012;
+
+      ctx.save();
+      ctx.translate(px, py);
+      ctx.scale(facing, 1);
+      ctx.globalAlpha = 0.92;
+
+      ctx.strokeStyle = '#fbbf24';
+      ctx.fillStyle = '#fbbf24';
+      ctx.lineWidth = 2.4;
+      ctx.lineCap = 'round';
+
+      const hipY = -12, shoulderY = -22, headY = -30;
+      const legSwing = airborne ? 0.5 : (isMoving ? Math.sin(walkPhase) * 0.95 : 0);
+      const legSwing2 = airborne ? -0.4 : (isMoving ? Math.sin(walkPhase + Math.PI) * 0.95 : 0);
+      const armSwing = airborne ? -0.6 : (isMoving ? Math.sin(walkPhase + Math.PI) * 0.7 : Math.sin(time * 0.0025) * 0.08);
+      const armSwing2 = airborne ? 0.9 : (isMoving ? Math.sin(walkPhase) * 0.7 : Math.sin(time * 0.0025 + Math.PI) * 0.08);
+
+      [legSwing, legSwing2].forEach((ang) => {
+        const kneeX = Math.sin(ang) * 8, kneeY = hipY + 7;
+        const footX = kneeX + Math.sin(ang * 0.6) * 6, footY = hipY + 14;
+        ctx.beginPath();
+        ctx.moveTo(0, hipY);
+        ctx.lineTo(kneeX, kneeY);
+        ctx.lineTo(footX, footY);
+        ctx.stroke();
+      });
+
+      ctx.beginPath();
+      ctx.moveTo(0, hipY);
+      ctx.lineTo(0, shoulderY);
+      ctx.stroke();
+
+      [armSwing, armSwing2].forEach((ang, i) => {
+        const dir = i === 0 ? 1 : -1;
+        const handX = Math.sin(ang) * 10 * dir;
+        const handY = shoulderY + 12 + Math.cos(ang) * 4;
+        ctx.beginPath();
+        ctx.moveTo(0, shoulderY);
+        ctx.lineTo(handX, handY);
+        ctx.stroke();
+      });
+
+      ctx.beginPath();
+      ctx.arc(0, headY, 7, 0, Math.PI * 2);
+      ctx.fill();
+
+      if (isShooting) {
+        ctx.fillStyle = '#fde68a';
+        ctx.beginPath();
+        ctx.arc(10, shoulderY + 8, 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+
+      // Nombre encima de la cabeza, sin espejar aunque el personaje mire a la izquierda.
+      ctx.save();
+      ctx.globalAlpha = 0.85;
+      ctx.font = '600 11px system-ui, -apple-system, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#fde68a';
+      ctx.fillText(o.name || 'Rival', px, py + headY - 12);
+      ctx.restore();
+    }
+
     function drawPlayer(time) {
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
@@ -4436,6 +4543,13 @@
       drawRain();
       drawParticles();
       if (player.grounded !== undefined) drawPlayer(time);
+
+      // MODO_SURVIVAL: dibuja al rival en el MISMO canvas (vista compartida),
+      // en su posición interpolada. En MODO_2VS2 los rivales se siguen
+      // mostrando solo en el panel HUD (qm-avatar), no en el canvas.
+      if (quickMatch && quickMatch.mode === 'MODO_SURVIVAL') {
+        Object.values(quickMatch.opponents).forEach(o => drawOpponentPlayer(o, time));
+      }
 
       ctx.restore();
 
