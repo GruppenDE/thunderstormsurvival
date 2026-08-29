@@ -1913,7 +1913,7 @@
     // de que suelte un corazón que cae y el jugador puede recoger para ganar vida. ---
     let heartPickups = [];
     const HEART_DROP_LEVEL = 30;
-    const HEART_DROP_CHANCE = 0.50;
+    const HEART_DROP_CHANCE = 0.25;
 
     // --- OVNIs: array porque en niveles múltiplo de 10 aparecen dos a la vez.
     // Cada uno entra volando, sobrevuela y dispara rayos eléctricos hacia el
@@ -3923,7 +3923,7 @@
       sfxUfoHit();
       score += 15;
       scoreVal.textContent = score;
-      // --- Desde el nivel 30 en adelante, 50% de probabilidad de soltar un corazón al derribar el OVNI ---
+      // --- Desde el nivel 30 en adelante, 25% de probabilidad de soltar un corazón al derribar el OVNI ---
       if (level >= HEART_DROP_LEVEL && Math.random() < HEART_DROP_CHANCE) {
         spawnHeartPickup(u.x, u.y);
       }
@@ -3934,7 +3934,7 @@
     function spawnHeartPickup(x, y) {
       heartPickups.push({
         x, y,
-        vy: 1.6,
+        vy: 2.6,
         radius: 13,
         bornAt: clock,
         phase: Math.random() * Math.PI * 2
