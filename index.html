@@ -3865,8 +3865,7 @@
     // --- Dispara un rayo de un OVNI hacia el jugador, guardando su
     // trayectoria/opacidad en las propiedades indicadas (ptsKey/alphaKey). ---
     function fireBeamAt(u, target, ptsKey, alphaKey) {
-      const playerMoving = keys.left || keys.right;
-      const missed = playerMoving && Math.random() < 0.10;
+      const missed = Math.random() < 0.5; // 50% de fallar, 50% de acertar
       let aimX = target.x;
       const aimY = target.y - target.height / 2;
       if (missed) {
