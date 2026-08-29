@@ -3240,7 +3240,7 @@
       return {
         name: (currentUser && currentUser.name) || 'Jugador',
         flag: (currentUser && currentUser.flag) || '🏳️',
-        x: 0, y: 0, facing: 1, grounded: true, action: 'idle',
+        nx: 0.5, h: 0, facing: 1, grounded: true, action: 'idle', shieldActive: false,
         lastSeen: Date.now()
       };
     }
@@ -3454,8 +3454,15 @@
         resultShown: false,
         companion: {
           name: partner ? partner.name : 'Compañero',
-          prevX: 0, prevY: 0, nextX: 0, nextY: 0, curX: 0, curY: 0,
-          facing: 1, action: 'idle', since: performance.now(),
+          // Se inicializa en el mismo punto de partida que el jugador local
+          // (centro, a nivel de suelo) en vez de (0,0) para evitar que el
+          // compañero aparezca "teletransportado" en la esquina superior
+          // izquierda durante el primer instante, antes de recibir su
+          // primera posición real por la red.
+          prevX: cssW / 2, prevY: cssH - groundOffset(),
+          nextX: cssW / 2, nextY: cssH - groundOffset(),
+          curX: cssW / 2, curY: cssH - groundOffset(),
+          facing: 1, action: 'idle', shieldActive: false, since: performance.now(),
           lastSeen: Date.now(), disconnected: false
         }
       };
@@ -3482,13 +3489,29 @@
       if (!partner) {
         c.disconnected = true; c.action = 'idle';
       } else {
-        if (partner.x !== c.nextX || partner.y !== c.nextY) {
+        // El compañero puede estar jugando en una pantalla de otro tamaño
+        // (otro celular, otra ventana), así que su posición NUNCA viaja como
+        // píxel absoluto (eso es lo que lo hacía aparecer descolocado, cortado
+        // o "flotando" fuera del suelo). Igual que ya se hace con los
+        // obstáculos del mapa compartido, viaja normalizada:
+        //  - nx: fracción horizontal (0..1) de SU ancho de pantalla → se
+        //    reescala aquí multiplicándola por MI propio cssW.
+        //  - h: altura sobre el suelo en píxeles (independiente de la
+        //    resolución, porque la física del salto usa píxeles fijos en
+        //    ambos dispositivos) → se resta de MI propio nivel de suelo.
+        const groundY = cssH - groundOffset();
+        const targetX = (typeof partner.nx === 'number' ? partner.nx : 0.5) * cssW;
+        const targetY = groundY - (partner.h || 0);
+        if (targetX !== c.nextX || targetY !== c.nextY) {
           c.prevX = c.curX; c.prevY = c.curY;
-          c.nextX = partner.x; c.nextY = partner.y;
+          c.nextX = targetX; c.nextY = targetY;
           c.since = performance.now();
         }
         c.facing = partner.facing || 1;
         c.action = partner.action || 'idle';
+        // Escudo de inmunidad al subir de nivel: antes no viajaba por la red,
+        // así que el compañero nunca se veía protegido aunque sí lo estuviera.
+        c.shieldActive = !!partner.shieldActive;
         if (partner.lastSeen) c.lastSeen = partner.lastSeen;
       }
 
@@ -3654,13 +3677,20 @@
       const action = (clock - lastShotAt) < SHOT_POSE_DURATION ? 'shoot'
         : (!player.grounded ? 'jump' : ((keys.left || keys.right) ? 'run' : 'idle'));
 
+      // Se manda la posición NORMALIZADA (fracción del ancho + altura sobre
+      // el suelo), no el píxel absoluto, para que se vea igual de bien sin
+      // importar el tamaño de pantalla del otro jugador.
+      const nx = cssW > 0 ? player.x / cssW : 0.5;
+      const heightAboveGround = (cssH - groundOffset()) - player.y;
+
       window.firebaseReady.then(fb => {
         if (!survival) return;
         fb.updateDoc(fb.doc(fb.db, 'survivalMatches', survival.matchId), {
-          [`players.${survival.uid}.x`]: Math.round(player.x),
-          [`players.${survival.uid}.y`]: Math.round(player.y),
+          [`players.${survival.uid}.nx`]: nx,
+          [`players.${survival.uid}.h`]: Math.round(heightAboveGround),
           [`players.${survival.uid}.facing`]: player.facing,
           [`players.${survival.uid}.action`]: action,
+          [`players.${survival.uid}.shieldActive`]: !!player.shieldActive,
           [`players.${survival.uid}.lastSeen`]: Date.now()
         }).catch(() => {});
       });
@@ -3720,7 +3750,10 @@
         vx: c.action === 'run' ? backup.speed * c.facing : 0,
         vy: c.action === 'jump' ? backup.jumpForce : 0,
         grounded: c.action !== 'jump',
-        invincible: false, shieldActive: false,
+        // Antes se forzaba siempre a "sin escudo", así que el compañero nunca
+        // mostraba el anillo de protección al subir de nivel aunque sí
+        // estuviera protegido. Ahora refleja el estado real recibido por red.
+        invincible: c.shieldActive, shieldActive: c.shieldActive,
         walkPhase: (time / 90) % (Math.PI * 2),
         trail: []
       };
