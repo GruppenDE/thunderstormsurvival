@@ -702,6 +702,23 @@
   .qm-stat{ color:#e2e8f0; }
   .qm-status{ color:#64748b; min-width:14px; text-align:center; }
 
+  /* Panel del compañero en Modo Supervivencia (cooperativo, mapa compartido) */
+  #sv-hud{
+    display:none;
+    align-items:center; justify-content:space-between;
+    background: rgba(15,23,42,0.6);
+    border: 1px solid rgba(34,211,238,0.3);
+    border-radius: 8px;
+    padding: 6px 10px;
+    margin-bottom: 8px;
+    font-family: ui-monospace, monospace;
+    font-size: 10.5px;
+  }
+  #sv-hud.show{ display:flex; }
+  #sv-hud .sv-name{ color:#67e8f9; font-weight:700; max-width:90px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #sv-hud .sv-stats{ display:flex; align-items:center; gap:10px; color:#e2e8f0; }
+  #sv-hud .sv-status{ color:#64748b; }
+
   @media (prefers-reduced-motion: reduce){
     /* El OVNI de carga ya maneja su propia regla de reduced-motion arriba */
   }
@@ -908,6 +925,15 @@
       <!-- Panel de rivales (solo visible en Partida Rápida / matchmaking automático) -->
       <div id="qm-hud">
         <div id="qm-opponents"></div>
+      </div>
+
+      <!-- Panel del compañero (solo visible en Modo Supervivencia, 2 jugadores cooperativo) -->
+      <div id="sv-hud">
+        <span class="sv-name" id="sv-companion-name">Compañero</span>
+        <div class="sv-stats">
+          <span>❤️ <span id="sv-team-lives">5</span></span>
+          <span class="sv-status" id="sv-companion-status"></span>
+        </div>
       </div>
 
       <!-- Sub-barra informativa -->
@@ -1264,6 +1290,7 @@
         if (typeof teardownQuickFlow === 'function') teardownQuickFlow();
         if (typeof leaveMultiplayer === 'function') leaveMultiplayer();
         if (typeof leaveQuickMatch === 'function') leaveQuickMatch();
+        if (typeof leaveSurvival === 'function') leaveSurvival();
         if (roomModal && !roomModal.classList.contains('hidden')) roomModal.classList.add('hidden');
         if (typeof updateControlsHint === 'function') updateControlsHint();
 
@@ -1882,33 +1909,6 @@
     let lightningBolts = [];
     let groundImpacts = [];
 
-    // --- PRNG con semilla (mulberry32): genera la MISMA secuencia de números
-    // "aleatorios" en dos dispositivos distintos si arrancan con la misma
-    // semilla. Se usa exclusivamente para generar el campo de obstáculos
-    // (spawnObstacle / fallSpeedForLevel) en MODO_SURVIVAL multijugador, de
-    // forma que ambas pantallas vean caer las mismas bolas, en la misma
-    // posición y en el mismo momento, sin necesidad de transmitir cada
-    // obstáculo por la red (solo se sincroniza la semilla, una vez, al
-    // crear/unirse a la sala). El resto del juego (partículas, rayos de
-    // ambiente, OVNIs, etc.) sigue usando Math.random() normal, porque es
-    // decorativo y no necesita verse idéntico en ambas pantallas.
-    function mulberry32(seed) {
-      let a = seed >>> 0;
-      return function () {
-        a |= 0; a = (a + 0x6D2B79F5) | 0;
-        let t = Math.imul(a ^ (a >>> 15), 1 | a);
-        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-      };
-    }
-    // `rng` es la fuente de aleatoriedad para el campo de obstáculos. Por
-    // defecto es Math.random (modo solo / 2vs2); en MODO_SURVIVAL
-    // multijugador se reemplaza por un generador con semilla compartida
-    // (ver beginQuickMatchRound). resetGame() la restaura a Math.random en
-    // cada partida nueva por seguridad; MODO_SURVIVAL la vuelve a fijar
-    // justo después.
-    let rng = Math.random;
-
     // --- Corazones: en el nivel 40, al derribar un OVNI hay 10% de probabilidad
     // de que suelte un corazón que cae y el jugador puede recoger para ganar vida. ---
     let heartPickups = [];
@@ -2234,12 +2234,6 @@
       pauseOverlay.classList.remove('show');
       startTime = Date.now();
       gameState = 'PLAYING';
-      // Por defecto, cada partida usa aleatoriedad normal (no sincronizada).
-      // MODO_SURVIVAL multijugador la sobreescribe justo después de llamar
-      // a resetGame(), en beginQuickMatchRound(), con el PRNG de semilla
-      // compartida. Ponerlo acá evita que una semilla vieja de una partida
-      // anterior "se filtre" a la siguiente partida en solitario.
-      rng = Math.random;
       overlay.classList.add('hidden-fade');
       finalScoreWrap.classList.remove('show');
       finalScoreWrap.style.display = '';
@@ -2249,6 +2243,7 @@
     startBtn.addEventListener('click', () => {
       leaveMultiplayer();
       leaveQuickMatch();
+      if (typeof leaveSurvival === 'function') leaveSurvival();
       updateControlsHint();
       resetGame();
     });
@@ -2356,11 +2351,13 @@
         <p class="room-status-line">${introText}</p>
         <button id="qm-pick-survival" class="room-btn">🔍 Partida Rápida — Survival (1 vs 1)</button>
         <button id="qm-pick-2vs2" class="room-btn">🔍 Partida Rápida — 2vs2 (hasta 4)</button>
+        <button id="qm-pick-survival2p" class="room-btn">🛡️ Supervivencia (2 Jugadores)</button>
         <button id="room-create-btn" class="room-btn secondary">Crear Sala por Código</button>
         <button id="room-join-btn" class="room-btn secondary">Unirse con Código</button>
       `;
       document.getElementById('qm-pick-survival').addEventListener('click', () => startQuickSearch('MODO_SURVIVAL'));
       document.getElementById('qm-pick-2vs2').addEventListener('click', () => startQuickSearch('MODO_2VS2'));
+      document.getElementById('qm-pick-survival2p').addEventListener('click', startSurvivalSearch);
       document.getElementById('room-create-btn').addEventListener('click', renderCreateOptions);
       document.getElementById('room-join-btn').addEventListener('click', renderJoinForm);
     }
@@ -2763,13 +2760,7 @@
         flag: (currentUser && currentUser.flag) || '🏳️',
         score: 0, lives: START_LIVES,
         finished: false, finalScore: 0, finalTime: 0,
-        // Posición normalizada como fracción del canvas (0..1), NO en
-        // píxeles crudos. Cada jugador puede tener una pantalla de ancho/alto
-        // distinto (celular vs. escritorio); transmitir una fracción del
-        // propio canvas y multiplicarla por el canvas del receptor es lo que
-        // permite dibujar al rival en la posición correcta dentro del MISMO
-        // mapa, sin importar el tamaño de pantalla de cada uno.
-        xFrac: 0.5, yFrac: 0.85, facing: 1, grounded: true, action: 'idle',
+        x: 0, y: 0, vx: 0, facing: 1, grounded: true, action: 'idle',
         lastSeen: Date.now()
       };
     }
@@ -2873,12 +2864,7 @@
         startAt: null,
         playerCount: 1,
         playerOrder: [uid],
-        players: { [uid]: qmNewPlayerState() },
-        // Semilla compartida para el campo de obstáculos (solo se usa en
-        // MODO_SURVIVAL, ver spawnObstacle/rng). La genera quien crea la
-        // sala; todos los que se unen la leen del documento y generan
-        // exactamente el mismo campo de obstáculos.
-        seed: Math.floor(Math.random() * 4294967295)
+        players: { [uid]: qmNewPlayerState() }
       });
       return ref.id;
     }
@@ -2950,13 +2936,7 @@
         if (id === uid) return;
         const p = data.players[id];
         quickMatch.opponents[id] = {
-          name: p.name,
-          // prevXFrac/nextXFrac: fracción (0..1) del canvas del RIVAL, usada
-          // para interpolar. curX/curY: ya convertidas a píxeles de ESTE
-          // canvas (se recalculan en cada frame en qmUpdateInterpolation,
-          // porque cssW/cssH pueden cambiar si el usuario rota o redimensiona).
-          prevXFrac: 0.5, prevYFrac: 0.85, nextXFrac: 0.5, nextYFrac: 0.85,
-          curX: 0, curY: 0, facing: 1,
+          name: p.name, prevX: 0, prevY: 0, nextX: 0, nextY: 0, curX: 0, curY: 0,
           since: performance.now(), action: 'idle',
           score: 0, lives: START_LIVES, finished: false, finalScore: 0,
           lastSeen: Date.now(), disconnected: false
@@ -2967,15 +2947,6 @@
 
       qmStartHeartbeat();
       resetGame();
-
-      // MODO_SURVIVAL: reemplaza el generador de aleatoriedad del campo de
-      // obstáculos por uno con la semilla compartida de la sala, para que
-      // ambos jugadores vean caer las mismas bolas en la misma posición y
-      // el mismo momento. Se hace DESPUÉS de resetGame() porque esa función
-      // restaura `rng` a Math.random por defecto.
-      if (mode === 'MODO_SURVIVAL' && typeof data.seed === 'number') {
-        rng = mulberry32(data.seed);
-      }
     }
 
     function qmCreateOpponentRow(id, name) {
@@ -3008,19 +2979,12 @@
           if (statusEl) statusEl.textContent = '🔌';
           return;
         }
-        if (remote.xFrac !== local.nextXFrac || remote.yFrac !== local.nextYFrac) {
-          // Arranca la interpolación desde donde el rival se ve AHORA en
-          // pantalla (curXFrac/curYFrac), no desde el destino anterior, para
-          // que no haya un salto brusco si llega un paquete nuevo antes de
-          // terminar de interpolar el anterior.
-          local.prevXFrac = (typeof local.curXFrac === 'number') ? local.curXFrac : local.nextXFrac;
-          local.prevYFrac = (typeof local.curYFrac === 'number') ? local.curYFrac : local.nextYFrac;
-          local.nextXFrac = (typeof remote.xFrac === 'number') ? remote.xFrac : local.nextXFrac;
-          local.nextYFrac = (typeof remote.yFrac === 'number') ? remote.yFrac : local.nextYFrac;
+        if (remote.x !== local.nextX || remote.y !== local.nextY) {
+          local.prevX = local.curX; local.prevY = local.curY;
+          local.nextX = remote.x; local.nextY = remote.y;
           local.since = performance.now();
         }
         local.action = remote.action || 'idle';
-        local.facing = remote.facing || 1;
         local.score = remote.finished ? (remote.finalScore || 0) : (remote.score || 0);
         local.lives = Math.max(0, remote.finished ? 0 : (remote.lives ?? START_LIVES));
         local.finished = !!remote.finished;
@@ -3063,12 +3027,8 @@
         if (!quickMatch) return;
         const uid = quickMatch.uid;
         fb.updateDoc(fb.doc(fb.db, 'matches', quickMatch.matchId), {
-          // Se transmite como FRACCIÓN del propio canvas (0..1), no en
-          // píxeles crudos, para que el receptor pueda ubicar al rival en
-          // la posición correcta de SU PROPIO canvas aunque tenga una
-          // pantalla de otro tamaño (ver qmNewPlayerState / drawOpponentPlayer).
-          [`players.${uid}.xFrac`]: +(player.x / cssW).toFixed(4),
-          [`players.${uid}.yFrac`]: +(player.y / cssH).toFixed(4),
+          [`players.${uid}.x`]: Math.round(player.x),
+          [`players.${uid}.y`]: Math.round(player.y),
           [`players.${uid}.facing`]: player.facing,
           [`players.${uid}.grounded`]: player.grounded,
           [`players.${uid}.action`]: action,
@@ -3079,21 +3039,16 @@
     }
 
     // Interpolación lineal en cliente: se llama cada frame (rAF) para que
-    // el rival se mueva fluido (en el HUD y, en MODO_SURVIVAL, dentro del
-    // canvas compartido) aunque los datos de Firestore lleguen solo ~12
-    // veces por segundo. Interpola en FRACCIÓN (0..1) y recién al final
-    // convierte a píxeles con el cssW/cssH de ESTE dispositivo, para que
-    // la posición se vea correcta sin importar el tamaño de cada pantalla.
+    // el avatar de cada rival se mueva fluido en el HUD aunque los datos
+    // de Firestore lleguen solo ~12 veces por segundo.
     function qmUpdateInterpolation(nowMs) {
       if (!quickMatch) return;
       Object.keys(quickMatch.opponents).forEach((id) => {
         const o = quickMatch.opponents[id];
         if (o.disconnected) return;
         const t = Math.min(1, (nowMs - o.since) / QM_INTERP_MS);
-        o.curXFrac = o.prevXFrac + (o.nextXFrac - o.prevXFrac) * t;
-        o.curYFrac = o.prevYFrac + (o.nextYFrac - o.prevYFrac) * t;
-        o.curX = o.curXFrac * cssW;
-        o.curY = o.curYFrac * cssH;
+        o.curX = o.prevX + (o.nextX - o.prevX) * t;
+        o.curY = o.prevY + (o.nextY - o.prevY) * t;
         const avatarEl = document.getElementById(`qm-avatar-${id}`);
         if (!avatarEl) return;
         const bounce = o.action === 'jump' ? -6 : 0;
@@ -3232,8 +3187,587 @@
       } catch (e) { /* ignorar: la limpieza por timeout lo cubrirá */ }
     }
 
-    window.addEventListener('pagehide', () => { if (quickMatch || qmFlow) leaveQuickMatch(); });
-    window.addEventListener('beforeunload', () => { if (quickMatch || qmFlow) leaveQuickMatch(); });
+    window.addEventListener('pagehide', () => { if (quickMatch || qmFlow) leaveQuickMatch(); if (survival || svFlow) leaveSurvival(); });
+    window.addEventListener('beforeunload', () => { if (quickMatch || qmFlow) leaveQuickMatch(); if (survival || svFlow) leaveSurvival(); });
+
+    // =====================================================================
+    // --- MODO SUPERVIVENCIA (2 JUGADORES) — Mapa compartido, cooperativo ---
+    // Ambos jugadores comparten un único mapa (misma semilla) y un pozo de
+    // vidas en común: el objetivo es sobrevivir juntos el mayor tiempo
+    // posible. Usa la colección Firestore "survivalMatches" con las mismas
+    // convenciones de matchmaking transaccional + tick de posición +
+    // interpolación en cliente que ya usan MODO_SURVIVAL / MODO_2VS2.
+    // =====================================================================
+
+    // ---------------------------------------------------------------------
+    // 1) PRNG DETERMINISTA (mulberry32)
+    // ---------------------------------------------------------------------
+    // Ambos clientes reciben el MISMO número entero (seed) desde Firestore y
+    // generan su propia secuencia de obstáculos localmente con este generador.
+    // Como mulberry32 es puramente matemático (sin Math.random()), produce
+    // exactamente la misma secuencia de números en cualquier dispositivo.
+    function mulberry32(seed) {
+      let a = seed >>> 0;
+      return function () {
+        a |= 0; a = (a + 0x6D2B79F5) | 0;
+        let t = Math.imul(a ^ (a >>> 15), 1 | a);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296; // [0,1)
+      };
+    }
+
+    // ---------------------------------------------------------------------
+    // 2) CONFIGURACIÓN
+    // ---------------------------------------------------------------------
+    const SV_TICK_MS       = 75;   // envío de posición: ~13/s (dentro de 10-15/s pedido)
+    const SV_INTERP_MS     = 120;  // ventana de interpolación en cliente (absorbe jitter)
+    const SV_HEARTBEAT_MS  = 4000;
+    const SV_STALE_MS      = 9000; // sin heartbeat => compañero desconectado
+    const SV_COUNTDOWN_MS  = 3500;
+    const SV_LOGIC_TICK_MS = 100;  // "reloj de mapa": 10 ticks lógicos/seg, compartidos
+    const SV_TEAM_LIVES    = 5;    // vidas COMPARTIDAS del equipo (objetivo: sobrevivir juntos)
+
+    const svModal = () => roomModalBody; // reutiliza el modal de salas existente
+
+    // ---------------------------------------------------------------------
+    // 3) ESTADO
+    // ---------------------------------------------------------------------
+    let svFlow = null;          // { matchId, uid, unsub, countdownTimer } — mientras se forma la sala
+    let survival = null;        // partida activa: ver svBeginRound()
+    let svSearchCancelled = false;
+
+    function svNewPlayerState() {
+      return {
+        name: (currentUser && currentUser.name) || 'Jugador',
+        flag: (currentUser && currentUser.flag) || '🏳️',
+        x: 0, y: 0, facing: 1, grounded: true, action: 'idle',
+        lastSeen: Date.now()
+      };
+    }
+
+    // ---------------------------------------------------------------------
+    // 4) MATCHMAKING (botón "🛡️ Supervivencia (2 Jugadores)")
+    // ---------------------------------------------------------------------
+    async function startSurvivalSearch() {
+      svSearchCancelled = false;
+      svModal().innerHTML = `
+        <p class="room-status-line">Buscando compañero para Supervivencia…</p>
+        <div class="room-spinner"></div>
+        <button id="sv-cancel-search" class="room-btn secondary">Cancelar</button>
+      `;
+      document.getElementById('sv-cancel-search').addEventListener('click', () => {
+        svSearchCancelled = true;
+        teardownSurvivalFlow();
+        renderRoomMenu();
+      });
+
+      try {
+        const fb = await window.firebaseReady;
+        const uid = fb.auth.currentUser && fb.auth.currentUser.uid;
+        if (!uid) {
+          svModal().innerHTML = `<p class="room-error">Debes iniciar sesión para jugar en línea.</p><button id="room-back-btn" class="room-btn secondary">Volver</button>`;
+          document.getElementById('room-back-btn').addEventListener('click', renderRoomMenu);
+          return;
+        }
+        const matchId = await svFindOrCreateMatch(fb, uid);
+        if (svSearchCancelled) { svLeaveDoc(fb, matchId, uid); return; }
+
+        svFlow = { matchId, uid, unsub: null, countdownTimer: null };
+        listenSurvivalMatch(fb, matchId, uid);
+      } catch (e) {
+        console.error('Error en matchmaking de Supervivencia:', e);
+        svModal().innerHTML = `<p class="room-error">${escapeHtml(roomErrorMessage(e))}</p><button id="room-back-btn" class="room-btn secondary">Volver</button>`;
+        document.getElementById('room-back-btn').addEventListener('click', renderRoomMenu);
+      }
+    }
+
+    // Busca una sala "esperando" con cupo (máx 2) y se une de forma ATÓMICA
+    // (transacción de Firestore evita que dos jugadores tomen el mismo cupo
+    // a la vez). Si no encuentra ninguna, crea una nueva con la semilla del mapa.
+    async function svFindOrCreateMatch(fb, uid) {
+      const col = fb.collection(fb.db, 'survivalMatches');
+      const q = fb.query(col, fb.where('status', '==', 'esperando'), fb.where('hostDevice', '==', DEVICE_TYPE), fb.limit(10));
+      const snap = await fb.getDocs(q);
+      for (const docSnap of snap.docs) {
+        if (await svTryJoin(fb, docSnap.ref, uid)) return docSnap.id;
+      }
+      return await svCreateMatch(fb, uid);
+    }
+
+    async function svTryJoin(fb, ref, uid) {
+      try {
+        return await fb.runTransaction(fb.db, async (tx) => {
+          const snap = await tx.get(ref);
+          if (!snap.exists()) return false;
+          const data = snap.data();
+          if (data.status !== 'esperando') return false;
+          if (data.players && data.players[uid]) return true; // reconexión
+          const count = data.playerCount || 0;
+          if (count >= 2) return false;
+
+          const newCount = count + 1;
+          const update = {
+            playerCount: newCount,
+            [`players.${uid}`]: svNewPlayerState(),
+            playerOrder: [...(data.playerOrder || []), uid]
+          };
+          if (newCount >= 2) {
+            update.status = 'jugando';
+            // startAt: instante ACORDADO por ambos (mismo epoch ms para los dos
+            // clientes) — es el "cero" del reloj de mapa compartido.
+            update.startAt = Date.now() + SV_COUNTDOWN_MS;
+          }
+          tx.update(ref, update);
+          return true;
+        });
+      } catch (e) {
+        console.error('No se pudo unir a la sala de Supervivencia:', e);
+        return false;
+      }
+    }
+
+    async function svCreateMatch(fb, uid) {
+      const ref = fb.doc(fb.collection(fb.db, 'survivalMatches')); // id único autogenerado
+      // ★ SEMILLA COMPARTIDA: el host la genera UNA sola vez. Todo el mapa
+      // (obstáculos, su x, su velocidad de caída, su fase de movimiento) se
+      // deriva matemáticamente de este número + del "reloj de mapa" (ver
+      // sección 6), así que NUNCA se transmite cada obstáculo por la red:
+      // ambos clientes lo calculan de forma idéntica y local.
+      const seed = (Math.random() * 2 ** 31) | 0;
+      await fb.setDoc(ref, {
+        status: 'esperando',
+        seed,
+        hostDevice: DEVICE_TYPE,
+        createdAt: fb.serverTimestamp(),
+        startAt: null,
+        playerCount: 1,
+        playerOrder: [uid],
+        players: { [uid]: svNewPlayerState() },
+        teamLives: SV_TEAM_LIVES,
+        teamScore: 0,
+        gameOver: false
+      });
+      return ref.id;
+    }
+
+    function svLeaveDoc(fb, matchId, uid) {
+      if (!matchId || !uid) return;
+      fb.runTransaction(fb.db, async (tx) => {
+        const ref = fb.doc(fb.db, 'survivalMatches', matchId);
+        const snap = await tx.get(ref);
+        if (!snap.exists()) return;
+        const data = snap.data();
+        const players = { ...(data.players || {}) };
+        delete players[uid];
+        const remaining = Object.keys(players);
+        if (remaining.length === 0) { tx.delete(ref); return; }
+        tx.update(ref, {
+          players,
+          playerCount: remaining.length,
+          playerOrder: (data.playerOrder || []).filter(id => id !== uid)
+        });
+      }).catch(() => {});
+    }
+
+    function teardownSurvivalFlow() {
+      if (!svFlow) return;
+      if (svFlow.unsub) svFlow.unsub();
+      if (svFlow.countdownTimer) clearTimeout(svFlow.countdownTimer);
+      const { matchId, uid } = svFlow;
+      if (matchId) window.firebaseReady.then(fb => svLeaveDoc(fb, matchId, uid));
+      svFlow = null;
+    }
+
+    function listenSurvivalMatch(fb, matchId, uid) {
+      const ref = fb.doc(fb.db, 'survivalMatches', matchId);
+      const unsub = fb.onSnapshot(ref, (snap) => {
+        if (!snap.exists()) {
+          if (svFlow && svFlow.matchId === matchId) {
+            svFlow = null;
+            if (!roomModal.classList.contains('hidden')) renderRoomMenu();
+          }
+          return;
+        }
+        handleSurvivalSnapshot(matchId, uid, snap.data());
+      }, (err) => console.error('Error escuchando Supervivencia:', err));
+      if (svFlow && svFlow.matchId === matchId) svFlow.unsub = unsub;
+      else if (survival && survival.matchId === matchId) survival.unsub = unsub;
+    }
+
+    function handleSurvivalSnapshot(matchId, uid, data) {
+      if (data.status === 'esperando') {
+        if (svFlow && svFlow.matchId === matchId) {
+          svModal().innerHTML = `
+            <p class="room-status-line">Esperando compañero… (${data.playerCount || 1}/2)</p>
+            <div class="room-spinner"></div>
+            <button id="sv-cancel-wait" class="room-btn secondary">Cancelar</button>
+          `;
+          document.getElementById('sv-cancel-wait').addEventListener('click', () => {
+            teardownSurvivalFlow(); renderRoomMenu();
+          });
+        }
+        return;
+      }
+
+      if (data.status === 'jugando' && !survival) {
+        if (svFlow && svFlow.matchId === matchId && !svFlow.countdownTimer && data.startAt) {
+          svModal().innerHTML = `<p class="room-status-line">¡Compañero encontrado! Preparando mapa compartido…</p><p class="room-status-line" id="sv-countdown-val">…</p>`;
+          const tick = () => {
+            if (!svFlow) return;
+            const remaining = data.startAt - Date.now();
+            const el = document.getElementById('sv-countdown-val');
+            if (remaining <= 0) {
+              if (el) el.textContent = '¡YA!';
+              svBeginRound(matchId, uid, data);
+              return;
+            }
+            if (el) el.textContent = Math.ceil(remaining / 1000) + '…';
+            svFlow.countdownTimer = setTimeout(tick, 120);
+          };
+          tick();
+        }
+        return;
+      }
+
+      if (survival && survival.matchId === matchId) svApplyUpdate(data);
+    }
+
+    // ---------------------------------------------------------------------
+    // 5) INICIO DE LA PARTIDA
+    // ---------------------------------------------------------------------
+    function svBeginRound(matchId, uid, data) {
+      if (svFlow && svFlow.countdownTimer) clearTimeout(svFlow.countdownTimer);
+      const partnerId = (data.playerOrder || []).find(id => id !== uid) || null;
+      const partner = partnerId ? data.players[partnerId] : null;
+
+      survival = {
+        matchId, uid, partnerId,
+        unsub: svFlow ? svFlow.unsub : null,
+        startAt: data.startAt,           // "cero" del reloj de mapa, común a ambos
+        rng: mulberry32(data.seed),      // generador local, mismo seed que el rival
+        nextLogicTick: 0,                // próximo tick lógico de mapa a procesar
+        lastBroadcast: 0,
+        heartbeatTimer: null, staleCheckTimer: null,
+        teamLives: data.teamLives ?? SV_TEAM_LIVES,
+        teamScore: data.teamScore || 0,
+        gameOver: !!data.gameOver,
+        resultShown: false,
+        companion: {
+          name: partner ? partner.name : 'Compañero',
+          prevX: 0, prevY: 0, nextX: 0, nextY: 0, curX: 0, curY: 0,
+          facing: 1, action: 'idle', since: performance.now(),
+          lastSeen: Date.now(), disconnected: false
+        }
+      };
+      svFlow = null;
+      roomModal.classList.add('hidden');
+      updateControlsHint();
+
+      mpHud.classList.remove('show'); qmHud.classList.remove('show'); // ocultamos HUDs de otros modos
+      const svHudEl = document.getElementById('sv-hud');
+      const svNameEl = document.getElementById('sv-companion-name');
+      if (svNameEl) svNameEl.textContent = survival.companion.name;
+      if (svHudEl) svHudEl.classList.add('show');
+
+      svObstacles.length = 0;
+      svStartHeartbeat();
+      resetGame();
+      lives = survival.teamLives; // el HUD de vidas muestra las vidas del EQUIPO, no las individuales
+      renderLives();
+    }
+
+    function svApplyUpdate(data) {
+      const partner = survival.partnerId ? data.players[survival.partnerId] : null;
+      const c = survival.companion;
+      if (!partner) {
+        c.disconnected = true; c.action = 'idle';
+      } else {
+        if (partner.x !== c.nextX || partner.y !== c.nextY) {
+          c.prevX = c.curX; c.prevY = c.curY;
+          c.nextX = partner.x; c.nextY = partner.y;
+          c.since = performance.now();
+        }
+        c.facing = partner.facing || 1;
+        c.action = partner.action || 'idle';
+        if (partner.lastSeen) c.lastSeen = partner.lastSeen;
+      }
+
+      survival.teamLives = Math.max(0, data.teamLives ?? survival.teamLives);
+      survival.teamScore = data.teamScore || survival.teamScore;
+      lives = survival.teamLives;
+      const livesEl = document.getElementById('sv-team-lives');
+      if (livesEl) livesEl.textContent = survival.teamLives;
+
+      if (data.gameOver && !survival.resultShown) {
+        survival.resultShown = true;
+        if (gameState === 'PLAYING') {
+          gameState = 'GAMEOVER';
+          overlay.classList.remove('hidden-fade');
+          startBtn.textContent = 'REINTENTAR';
+          sfxGameOver();
+          setTimeout(() => startMusic('gameover'), 450);
+        }
+        svShowResult(data);
+      }
+    }
+
+    // ---------------------------------------------------------------------
+    // 6) MAPA COMPARTIDO — obstáculos deterministas por semilla
+    // ---------------------------------------------------------------------
+    // Clave para que "las mismas coordenadas al mismo segundo" sea real: la
+    // posición de cada obstáculo NO se integra frame a frame con dt local
+    // (eso divergiría entre un móvil a 60fps y otro a 45fps). En vez de eso,
+    // cada obstáculo guarda el instante lógico en que nació y su velocidad;
+    // su posición en cualquier momento se CALCULA como función del reloj de
+    // mapa compartido (elapsed), así que a un mismo "elapsed" ambos clientes
+    // obtienen exactamente el mismo x,y sin importar su framerate local.
+    let svObstacles = [];
+
+    function svElapsed() {
+      // Reloj de mapa compartido: mismo origen (survival.startAt) en ambos
+      // dispositivos. Usa Date.now() (no performance.now()) porque startAt
+      // viene como epoch ms de Firestore.
+      return Math.max(0, Date.now() - survival.startAt);
+    }
+
+    function svSpawnChance(elapsedSec) {
+      // Dificultad progresiva, igual de espíritu que spawnChanceForLevel().
+      return Math.min(0.10 + elapsedSec * 0.002, 0.42);
+    }
+    function svFallSpeed(rng, elapsedSec) {
+      return 1.3 + rng() * 0.7 + Math.min(elapsedSec * 0.02, 3.2);
+    }
+
+    function svUpdateObstacles(time) {
+      if (!survival || gameState !== 'PLAYING') return;
+      const elapsed = svElapsed();
+      const currentTick = Math.floor(elapsed / SV_LOGIC_TICK_MS);
+
+      // Procesa cada tick lógico transcurrido, EN ORDEN, consumiendo el rng
+      // el mismo número de veces que el otro cliente para el mismo tick.
+      while (survival.nextLogicTick <= currentTick) {
+        const tick = survival.nextLogicTick;
+        const tickElapsedMs = tick * SV_LOGIC_TICK_MS;
+        const elapsedSec = tickElapsedMs / 1000;
+        const roll = survival.rng();
+        if (roll < svSpawnChance(elapsedSec)) {
+          svObstacles.push({
+            id: tick,                              // determinista: útil para depurar
+            nx: survival.rng(),                    // x NORMALIZADO (0..1): así funciona
+                                                    // igual aunque las pantallas tengan
+                                                    // tamaños distintos (móvil vs escritorio)
+            radius: 9 + survival.rng() * 3,
+            spawnElapsed: tickElapsedMs,
+            fallSpeedPxS: svFallSpeed(survival.rng, elapsedSec) * 60, // px/seg (referencia 60fps)
+            driftAmp: (survival.rng() - 0.5) * 0.05,  // deriva horizontal, fracción del ancho
+            driftFreq: 0.0012 + survival.rng() * 0.001,
+            phase: survival.rng() * Math.PI * 2
+          });
+        }
+        survival.nextLogicTick++;
+      }
+
+      // Posición actual de cada obstáculo = función pura del tiempo transcurrido
+      // desde que nació (no de un dt acumulado) → idéntica en ambos clientes.
+      for (let i = svObstacles.length - 1; i >= 0; i--) {
+        const o = svObstacles[i];
+        const age = elapsed - o.spawnElapsed;
+        const y = -20 + o.fallSpeedPxS * (age / 1000);
+        if (y > cssH + 30) { svObstacles.splice(i, 1); continue; }
+        o.x = o.nx * cssW + Math.sin(o.phase + elapsed * o.driftFreq) * o.driftAmp * cssW;
+        o.y = y;
+      }
+
+      svCheckLocalCollisions();
+    }
+
+    function svDrawObstacles() {
+      ctx.save();
+      for (const o of svObstacles) {
+        const grad = ctx.createRadialGradient(o.x, o.y, 0, o.x, o.y, o.radius * 2.2);
+        grad.addColorStop(0, 'rgba(96,165,250,0.95)');
+        grad.addColorStop(1, 'rgba(96,165,250,0)');
+        ctx.fillStyle = grad;
+        ctx.beginPath(); ctx.arc(o.x, o.y, o.radius * 2.2, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#dbeafe';
+        ctx.beginPath(); ctx.arc(o.x, o.y, o.radius, 0, Math.PI * 2); ctx.fill();
+      }
+      ctx.restore();
+    }
+
+    // Cada cliente detecta SUS PROPIOS golpes contra el mapa compartido (igual
+    // que hoy detecta sus propios golpes en modo un jugador) y le resta una
+    // vida al POZO COMÚN del equipo mediante una transacción atómica —evita
+    // que, si ambos chocan casi al mismo tiempo, se pierda un descuento por
+    // condición de carrera.
+    function svCheckLocalCollisions() {
+      for (let i = svObstacles.length - 1; i >= 0; i--) {
+        const o = svObstacles[i];
+        if (player.invincible) continue;
+        const dx = player.x - o.x, dy = (player.y - player.height / 2) - o.y;
+        const hitDist = o.radius + player.width / 2.2;
+        if (dx * dx + dy * dy < hitDist * hitDist) {
+          svObstacles.splice(i, 1);
+          svReportHit();
+        }
+      }
+    }
+
+    function svReportHit() {
+      if (!survival) return;
+      player.invincible = true;
+      player.invincibleUntil = clock + 1200;
+      window.firebaseReady.then(fb => {
+        if (!survival) return;
+        const ref = fb.doc(fb.db, 'survivalMatches', survival.matchId);
+        fb.runTransaction(fb.db, async (tx) => {
+          const snap = await tx.get(ref);
+          if (!snap.exists()) return;
+          const data = snap.data();
+          const newLives = Math.max(0, (data.teamLives ?? SV_TEAM_LIVES) - 1);
+          const update = { teamLives: newLives };
+          if (newLives <= 0) update.gameOver = true; // objetivo cumplido/fallado: se acabaron las vidas DEL EQUIPO
+          tx.update(ref, update);
+        }).catch(() => {});
+      });
+    }
+
+    // Suma puntos al marcador COMPARTIDO (llámalo, por ejemplo, cada segundo
+    // sobrevivido, igual que ya acumulas `score` en modo un jugador).
+    function svAddTeamScore(points) {
+      if (!survival) return;
+      window.firebaseReady.then(fb => {
+        fb.updateDoc(fb.doc(fb.db, 'survivalMatches', survival.matchId), {
+          teamScore: fb.increment(points)
+        }).catch(() => {});
+      });
+    }
+
+    // ---------------------------------------------------------------------
+    // 7) SINCRONIZACIÓN DE POSICIÓN (anti-lag) — tick 10-15/s + interpolación
+    // ---------------------------------------------------------------------
+    function svBroadcastFrame(time) {
+      if (!survival || gameState !== 'PLAYING') return;
+      if (time - survival.lastBroadcast < SV_TICK_MS) return;
+      survival.lastBroadcast = time;
+
+      const action = (clock - lastShotAt) < SHOT_POSE_DURATION ? 'shoot'
+        : (!player.grounded ? 'jump' : ((keys.left || keys.right) ? 'run' : 'idle'));
+
+      window.firebaseReady.then(fb => {
+        if (!survival) return;
+        fb.updateDoc(fb.doc(fb.db, 'survivalMatches', survival.matchId), {
+          [`players.${survival.uid}.x`]: Math.round(player.x),
+          [`players.${survival.uid}.y`]: Math.round(player.y),
+          [`players.${survival.uid}.facing`]: player.facing,
+          [`players.${survival.uid}.action`]: action,
+          [`players.${survival.uid}.lastSeen`]: Date.now()
+        }).catch(() => {});
+      });
+    }
+
+    // Interpolación lineal: se llama cada frame (rAF), independientemente de
+    // cuándo llegó el último paquete de red, para que el compañero se vea
+    // fluido en el canvas aunque los datos lleguen solo ~13 veces/segundo.
+    function svUpdateInterpolation(nowMs) {
+      if (!survival) return;
+      const c = survival.companion;
+      if (c.disconnected) return;
+      const t = Math.min(1, (nowMs - c.since) / SV_INTERP_MS);
+      c.curX = c.prevX + (c.nextX - c.prevX) * t;
+      c.curY = c.prevY + (c.nextY - c.prevY) * t;
+    }
+
+    function svStartHeartbeat() {
+      svSendHeartbeat();
+      survival.heartbeatTimer = setInterval(svSendHeartbeat, SV_HEARTBEAT_MS);
+      survival.staleCheckTimer = setInterval(svCheckStalePartner, SV_HEARTBEAT_MS);
+    }
+    function svSendHeartbeat() {
+      if (!survival) return;
+      window.firebaseReady.then(fb => {
+        if (!survival) return;
+        fb.updateDoc(fb.doc(fb.db, 'survivalMatches', survival.matchId), {
+          [`players.${survival.uid}.lastSeen`]: Date.now()
+        }).catch(() => {});
+      });
+    }
+    function svCheckStalePartner() {
+      if (!survival) return;
+      const c = survival.companion;
+      if (c.disconnected) return;
+      if (Date.now() - c.lastSeen > SV_STALE_MS) {
+        c.disconnected = true;
+        const statusEl = document.getElementById('sv-companion-status');
+        if (statusEl) statusEl.textContent = '🔌 Desconectado — sigues jugando solo';
+      }
+    }
+
+    // ---------------------------------------------------------------------
+    // 8) RENDERIZADO EN CANVAS — ambos personajes en el mismo escenario
+    // ---------------------------------------------------------------------
+    // Dibuja al compañero con el mismo sprite que drawPlayer(time), pero en
+    // la posición interpolada. Se sustituye temporalmente la variable global
+    // `player` por un "player fantasma" en la posición del compañero, se
+    // dibuja, y se restaura, para no duplicar la lógica visual del personaje.
+    function svDrawCompanion(time) {
+      if (!survival || survival.companion.disconnected) return;
+      const c = survival.companion;
+      const backup = player;
+      player = {
+        ...backup,
+        x: c.curX, y: c.curY, facing: c.facing,
+        vx: c.action === 'run' ? backup.speed * c.facing : 0,
+        vy: c.action === 'jump' ? backup.jumpForce : 0,
+        grounded: c.action !== 'jump',
+        invincible: false, shieldActive: false,
+        walkPhase: (time / 90) % (Math.PI * 2),
+        trail: []
+      };
+      ctx.save();
+      ctx.globalAlpha = 0.9;
+      ctx.filter = 'hue-rotate(130deg)'; // tinte distinto para diferenciar al compañero
+      drawPlayer(time);
+      ctx.filter = 'none';
+      ctx.restore();
+      player = backup;
+    }
+
+    // Punto de entrada de dibujo de la escena de Supervivencia. Sustituye,
+    // SOLO mientras `survival` esté activo, a la secuencia normal de
+    // drawObstacles()+drawPlayer() dentro de loop().
+    function svDrawScene(time) {
+      svDrawObstacles();
+      svDrawCompanion(time);
+      drawPlayer(time); // el propio personaje, con su arte normal sin tinte
+    }
+
+    function svShowResult(data) {
+      const survived = (data.teamLives ?? 0) > 0 ? false : true; // gameOver=true implica vidas en 0
+      finalScoreWrap.style.display = 'none';
+      mpResultEl.style.display = 'block';
+      mpResultEl.innerHTML = `
+        <span class="final-score-label" style="color:${survived ? '#f87171' : '#34d399'};">
+          ${survived ? '💀 EL EQUIPO CAYÓ' : '🏆 ¡SOBREVIVIERON!'}
+        </span>
+        <div class="vs-row" style="margin-top:6px;">
+          <span class="vs-name">Puntaje del equipo: <b>${data.teamScore || 0}</b></span>
+        </div>
+      `;
+      statusMsg.textContent = 'GAME OVER';
+    }
+
+    function leaveSurvival() {
+      teardownSurvivalFlow();
+      if (survival) {
+        if (survival.unsub) survival.unsub();
+        if (survival.heartbeatTimer) clearInterval(survival.heartbeatTimer);
+        if (survival.staleCheckTimer) clearInterval(survival.staleCheckTimer);
+        window.firebaseReady.then(fb => svLeaveDoc(fb, survival.matchId, survival.uid));
+        survival = null;
+      }
+      document.getElementById('sv-hud')?.classList.remove('show');
+    }
 
     // El máximo de bolas simultáneas crece con el nivel (empieza escaso, termina intenso)
     // -- Reducido para que el juego sea menos difícil --
@@ -3253,29 +3787,26 @@
     // La velocidad de caída empieza lenta y se acelera con el nivel
     // -- Reducida para dar más tiempo de reacción --
     function fallSpeedForLevel(lvl) {
-      return 1.1 + rng() * 0.6 + lvl * 0.26;
+      return 1.1 + Math.random() * 0.6 + lvl * 0.26;
     }
 
-    // Nota: usa `rng()` (no Math.random directamente) para que, en
-    // MODO_SURVIVAL multijugador, ambos jugadores generen exactamente el
-    // mismo campo de obstáculos a partir de la misma semilla compartida.
     function spawnObstacle() {
       if (obstacles.length >= maxObstaclesForLevel(level)) return;
-      if (rng() < spawnChanceForLevel(level)) {
-        const r = 9 + rng() * 2;
+      if (Math.random() < spawnChanceForLevel(level)) {
+        const r = 9 + Math.random() * 2;
         obstacles.push({
-          x: rng() * (cssW - 30) + 15,
+          x: Math.random() * (cssW - 30) + 15,
           y: -20,
           radius: r,
           vy: fallSpeedForLevel(level),
-          vx: (rng() - 0.5) * 1.6,
-          phase: rng() * Math.PI * 2,
-          orbitA: rng() * Math.PI * 2,
-          orbitB: rng() * Math.PI * 2,
+          vx: (Math.random() - 0.5) * 1.6,
+          phase: Math.random() * Math.PI * 2,
+          orbitA: Math.random() * Math.PI * 2,
+          orbitB: Math.random() * Math.PI * 2,
           bornAt: clock,
           boltState: 'idle',
           boltStateStart: clock,
-          boltIdleDur: 180 + rng() * 420
+          boltIdleDur: 180 + Math.random() * 420
         });
       }
     }
@@ -3728,36 +4259,45 @@
         if (player.trail[i].life <= 0) player.trail.splice(i, 1);
       }
 
-      spawnObstacle();
-      for (let i = obstacles.length - 1; i >= 0; i--) {
-        let obs = obstacles[i];
-        obs.y += obs.vy;
-        obs.x += obs.vx;
+      // En Modo Supervivencia el mapa (obstáculos) es compartido y determinista
+      // (misma semilla en ambos dispositivos) y se gestiona por separado en
+      // svUpdateObstacles(); el sistema individual de obstáculos se omite para
+      // no duplicar la lógica ni descontar vidas individuales por error.
+      if (!survival) {
+        spawnObstacle();
+        for (let i = obstacles.length - 1; i >= 0; i--) {
+          let obs = obstacles[i];
+          obs.y += obs.vy;
+          obs.x += obs.vx;
 
-        if (obs.y >= groundLevel - obs.radius) {
-          const impactForce = Math.min(Math.abs(obs.vy) / 6, 1.4);
-          obs.y = groundLevel - obs.radius;
-          spawnGroundImpact(obs.x, impactForce);
-          if (Math.random() < 0.35) {
-            lightningBolts.push({ pts: createLightning(obs.x, obs.y, player.x, player.y - player.height / 2, 9, 26), alpha: 1.0 });
-            sfxZap();
+          if (obs.y >= groundLevel - obs.radius) {
+            const impactForce = Math.min(Math.abs(obs.vy) / 6, 1.4);
+            obs.y = groundLevel - obs.radius;
+            spawnGroundImpact(obs.x, impactForce);
+            if (Math.random() < 0.35) {
+              lightningBolts.push({ pts: createLightning(obs.x, obs.y, player.x, player.y - player.height / 2, 9, 26), alpha: 1.0 });
+              sfxZap();
+            }
+            obstacles.splice(i, 1);
+            continue;
           }
-          obstacles.splice(i, 1);
-          continue;
+
+          const dx = player.x - obs.x;
+          const dy = (player.y - player.height / 2) - obs.y;
+          const distance = Math.sqrt(dx * dx + dy * dy);
+          const hitP1 = distance < player.radius + obs.radius - 3 && !player.invincible;
+
+          if (hitP1) {
+            obstacles.splice(i, 1);
+            loseLife();
+            continue;
+          }
+
+          if (obs.y > cssH + 30) obstacles.splice(i, 1);
         }
-
-        const dx = player.x - obs.x;
-        const dy = (player.y - player.height / 2) - obs.y;
-        const distance = Math.sqrt(dx * dx + dy * dy);
-        const hitP1 = distance < player.radius + obs.radius - 3 && !player.invincible;
-
-        if (hitP1) {
-          obstacles.splice(i, 1);
-          loseLife();
-          continue;
-        }
-
-        if (obs.y > cssH + 30) obstacles.splice(i, 1);
+      } else if (Math.floor(elapsedTime / 1000) !== Math.floor((elapsedTime - dt) / 1000)) {
+        // Cada segundo sobrevivido en equipo suma 1 punto al marcador compartido.
+        svAddTeamScore(1);
       }
 
       // --- Corazones cayendo: se mueven hacia abajo, el jugador puede recogerlos
@@ -4197,85 +4737,6 @@
       ctx.restore();
     }
 
-    // Dibuja al rival DENTRO del mismo canvas (MODO_SURVIVAL), en su
-    // posición interpolada (o.curX/o.curY, ya convertidas a píxeles de
-    // ESTE dispositivo por qmUpdateInterpolation). No replica el detalle
-    // de animación del jugador local (squash, trail, walkPhase) porque eso
-    // no se transmite por red -por diseño, para no saturar Firestore-,
-    // solo x/y/facing/action; alcanza para verse como un personaje
-    // reconocible y en la posición correcta del mundo compartido.
-    function drawOpponentPlayer(o, time) {
-      if (o.disconnected) return;
-      const px = o.curX, py = o.curY;
-      const facing = o.facing || 1;
-      const airborne = o.action === 'jump';
-      const isMoving = o.action === 'run';
-      const isShooting = o.action === 'shoot';
-      const walkPhase = time * 0.012;
-
-      ctx.save();
-      ctx.translate(px, py);
-      ctx.scale(facing, 1);
-      ctx.globalAlpha = 0.92;
-
-      ctx.strokeStyle = '#fbbf24';
-      ctx.fillStyle = '#fbbf24';
-      ctx.lineWidth = 2.4;
-      ctx.lineCap = 'round';
-
-      const hipY = -12, shoulderY = -22, headY = -30;
-      const legSwing = airborne ? 0.5 : (isMoving ? Math.sin(walkPhase) * 0.95 : 0);
-      const legSwing2 = airborne ? -0.4 : (isMoving ? Math.sin(walkPhase + Math.PI) * 0.95 : 0);
-      const armSwing = airborne ? -0.6 : (isMoving ? Math.sin(walkPhase + Math.PI) * 0.7 : Math.sin(time * 0.0025) * 0.08);
-      const armSwing2 = airborne ? 0.9 : (isMoving ? Math.sin(walkPhase) * 0.7 : Math.sin(time * 0.0025 + Math.PI) * 0.08);
-
-      [legSwing, legSwing2].forEach((ang) => {
-        const kneeX = Math.sin(ang) * 8, kneeY = hipY + 7;
-        const footX = kneeX + Math.sin(ang * 0.6) * 6, footY = hipY + 14;
-        ctx.beginPath();
-        ctx.moveTo(0, hipY);
-        ctx.lineTo(kneeX, kneeY);
-        ctx.lineTo(footX, footY);
-        ctx.stroke();
-      });
-
-      ctx.beginPath();
-      ctx.moveTo(0, hipY);
-      ctx.lineTo(0, shoulderY);
-      ctx.stroke();
-
-      [armSwing, armSwing2].forEach((ang, i) => {
-        const dir = i === 0 ? 1 : -1;
-        const handX = Math.sin(ang) * 10 * dir;
-        const handY = shoulderY + 12 + Math.cos(ang) * 4;
-        ctx.beginPath();
-        ctx.moveTo(0, shoulderY);
-        ctx.lineTo(handX, handY);
-        ctx.stroke();
-      });
-
-      ctx.beginPath();
-      ctx.arc(0, headY, 7, 0, Math.PI * 2);
-      ctx.fill();
-
-      if (isShooting) {
-        ctx.fillStyle = '#fde68a';
-        ctx.beginPath();
-        ctx.arc(10, shoulderY + 8, 3, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.restore();
-
-      // Nombre encima de la cabeza, sin espejar aunque el personaje mire a la izquierda.
-      ctx.save();
-      ctx.globalAlpha = 0.85;
-      ctx.font = '600 11px system-ui, -apple-system, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillStyle = '#fde68a';
-      ctx.fillText(o.name || 'Rival', px, py + headY - 12);
-      ctx.restore();
-    }
-
     function drawPlayer(time) {
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
@@ -4523,6 +4984,9 @@
       mpThrottledSync(time);
       mpBroadcastFrame(time);
       qmUpdateInterpolation(time);
+      svBroadcastFrame(time);        // transmite mi posición 10-15 veces/seg (Modo Supervivencia)
+      svUpdateInterpolation(time);   // interpola al compañero cada frame (Modo Supervivencia)
+      if (survival) svUpdateObstacles(time); // avanza el mapa compartido y detecta mis choques
 
       ctx.save();
       ctx.clearRect(0, 0, cssW, cssH);
@@ -4535,20 +4999,22 @@
       drawAmbientFlash();
       drawGround();
       drawFog();
-      drawObstacles(time);
+      if (survival) {
+        svDrawObstacles();
+      } else {
+        drawObstacles(time);
+      }
       drawHeartPickups(time);
       drawLightning();
       drawUfos();
       drawBullets();
       drawRain();
       drawParticles();
-      if (player.grounded !== undefined) drawPlayer(time);
-
-      // MODO_SURVIVAL: dibuja al rival en el MISMO canvas (vista compartida),
-      // en su posición interpolada. En MODO_2VS2 los rivales se siguen
-      // mostrando solo en el panel HUD (qm-avatar), no en el canvas.
-      if (quickMatch && quickMatch.mode === 'MODO_SURVIVAL') {
-        Object.values(quickMatch.opponents).forEach(o => drawOpponentPlayer(o, time));
+      if (survival) {
+        svDrawCompanion(time);
+        drawPlayer(time); // el propio personaje, con su arte normal sin tinte
+      } else if (player.grounded !== undefined) {
+        drawPlayer(time);
       }
 
       ctx.restore();
