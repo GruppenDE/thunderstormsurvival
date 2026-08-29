@@ -2545,14 +2545,44 @@
         });
       }
 
-      // OVNIs
+      // OVNIs (mismo estilo que el juego principal: platillo + cúpula + luces)
       if (f.ufos) {
         f.ufos.forEach(u => {
           const ux = u.x * sx, uy = u.y * sy;
+          const uw = Math.max(18, 24 * ((sx + sy) / 2) * 1.6);
+          const uh = uw * 0.29;
+
+          ctx.save();
+          ctx.globalCompositeOperation = 'lighter';
+          const glow = ctx.createRadialGradient(ux, uy, 0, ux, uy, uw * 1.9);
+          glow.addColorStop(0, 'rgba(96,165,250,0.4)');
+          glow.addColorStop(1, 'rgba(96,165,250,0)');
+          ctx.fillStyle = glow;
+          ctx.beginPath(); ctx.arc(ux, uy, uw * 1.9, 0, Math.PI * 2); ctx.fill();
+          ctx.restore();
+
+          ctx.save();
           ctx.fillStyle = '#111827';
           ctx.strokeStyle = '#93c5fd';
-          ctx.lineWidth = 1.5;
-          ctx.beginPath(); ctx.ellipse(ux, uy, 15 * sx, 5 * sy, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+          ctx.lineWidth = 1.6;
+          ctx.beginPath(); ctx.ellipse(ux, uy, uw, uh, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+
+          ctx.beginPath();
+          ctx.ellipse(ux, uy - uh * 0.85, uw * 0.46, uh * 1.3, 0, Math.PI, 0);
+          ctx.fillStyle = 'rgba(147,197,253,0.55)';
+          ctx.fill();
+          ctx.strokeStyle = '#dbeafe';
+          ctx.lineWidth = 1.2;
+          ctx.stroke();
+
+          for (let i = -2; i <= 2; i++) {
+            const blink = 0.35 + 0.65 * Math.abs(Math.sin(performance.now() * 0.006 + i * 1.3));
+            ctx.fillStyle = `rgba(245,158,11,${blink})`;
+            ctx.beginPath();
+            ctx.arc(ux + i * uw * 0.36, uy + uh * 0.6, 1.8, 0, Math.PI * 2);
+            ctx.fill();
+          }
+          ctx.restore();
         });
       }
 
@@ -2560,33 +2590,62 @@
       // (no depende del tamaño de la pantalla del host), para que siempre se
       // vean claros sin importar si mi compañero juega en un monitor grande
       // o en un celular chico.
-      const figH = Math.max(20, Math.min(42, tgCssH * 0.16));
+      const figH = Math.max(22, Math.min(46, tgCssH * 0.17));
 
       // Jugador 1 (host)
       if (f.p1) drawTeamGuestFigure(ctx, f.p1[0] * sx, f.p1[1] * sy, '#60a5fa', figH);
       // Jugador 2 (yo, remoto): se dibuja con mi posición predicha localmente
       // (instantánea al pulsar los controles), no con la del host, que llega
       // con retraso de red y se usa solo para corregir la predicción.
-      if (teamGuestPred.initialized) drawTeamGuestFigure(ctx, teamGuestPred.x * sx, teamGuestPred.y * sy, '#fbbf24', figH);
+      if (teamGuestPred.initialized) drawTeamGuestFigure(ctx, teamGuestPred.x * sx, teamGuestPred.y * sy, '#fbbf24', figH, !teamGuestPred.grounded);
       else if (f.p2) drawTeamGuestFigure(ctx, f.p2[0] * sx, f.p2[1] * sy, '#fbbf24', figH);
     }
 
-    function drawTeamGuestFigure(ctx, x, y, color, h) {
-      const w = h * 0.4;
+    // Silueta simple tipo "muñeco de palitos" (cabeza + torso + piernas),
+    // parecida al estilo del personaje real del juego, en vez de una simple
+    // cápsula sin forma. `airborne` dobla las piernas hacia arriba (pose de salto).
+    function drawTeamGuestFigure(ctx, x, y, color, h, airborne) {
+      const headR = h * 0.16;
+      const legLen = h * 0.34;
+      const torsoTop = y - h;
+      const hipY = y - legLen;
+
       ctx.save();
+      ctx.strokeStyle = color;
       ctx.fillStyle = color;
+      ctx.lineWidth = Math.max(1.6, h * 0.09);
+      ctx.lineCap = 'round';
       ctx.shadowColor = color;
-      ctx.shadowBlur = h * 0.24;
-      const r = w / 2;
+      ctx.shadowBlur = h * 0.35;
+
+      // Piernas
       ctx.beginPath();
-      ctx.moveTo(x - r, y);
-      ctx.arcTo(x - r, y - h, x, y - h, r);
-      ctx.arcTo(x + r, y - h, x + r, y, r);
-      ctx.lineTo(x + r, y);
-      ctx.arcTo(x + r, y + r * 0.4, x, y + r * 0.4, r);
-      ctx.arcTo(x - r, y + r * 0.4, x - r, y, r);
-      ctx.closePath();
+      if (airborne) {
+        ctx.moveTo(x, hipY); ctx.lineTo(x - h * 0.14, hipY + legLen * 0.55);
+        ctx.moveTo(x, hipY); ctx.lineTo(x + h * 0.14, hipY + legLen * 0.55);
+      } else {
+        ctx.moveTo(x, hipY); ctx.lineTo(x - h * 0.13, y);
+        ctx.moveTo(x, hipY); ctx.lineTo(x + h * 0.13, y);
+      }
+      ctx.stroke();
+
+      // Torso
+      ctx.beginPath();
+      ctx.moveTo(x, torsoTop + headR * 1.6);
+      ctx.lineTo(x, hipY);
+      ctx.stroke();
+
+      // Brazos
+      ctx.beginPath();
+      ctx.moveTo(x, torsoTop + headR * 2.2); ctx.lineTo(x - h * 0.17, torsoTop + headR * 3.6);
+      ctx.moveTo(x, torsoTop + headR * 2.2); ctx.lineTo(x + h * 0.17, torsoTop + headR * 3.6);
+      ctx.stroke();
+
+      // Cabeza
+      ctx.beginPath();
+      ctx.arc(x, torsoTop + headR, headR, 0, Math.PI * 2);
       ctx.fill();
+
       ctx.restore();
     }
 
