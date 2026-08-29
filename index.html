@@ -3180,11 +3180,13 @@
       }
       // role === 'guest'
       if (data.frame) teamGuestLatestFrame = data.frame;
-      // El host nos envió su oferta de video: respondemos para intentar ver
-      // su pantalla real (si falla, seguimos con la vista reconstruida).
-      if (data.webrtcOffer && !webrtcPC) {
-        startGuestWebRTC(data.webrtcOffer);
-      }
+      // NOTA: se desactivó a propósito la conexión por video WebRTC aquí.
+      // Esa vía mostraba literalmente la pantalla del host, pero el control
+      // seguía dependiendo 100% del viaje por Firestore (sin predicción
+      // local) y se congelaba en redes con NAT restrictivo (no hay TURN
+      // configurado). Siempre usamos la vista reconstruida de abajo, que sí
+      // tiene predicción local y se siente fluida.
+      // if (data.webrtcOffer && !webrtcPC) { startGuestWebRTC(data.webrtcOffer); }
       const finished = !!data.hostFinished;
       teamGuestScoreEl.textContent = finished ? (data.hostFinalScore || 0) : (data.hostScore || 0);
       teamGuestLivesEl.textContent = Math.max(0, data.hostLives ?? START_LIVES);
@@ -3229,7 +3231,10 @@
         hideP2Controls();
         updateControlsHint();
         resetGame();
-        startHostScreenShare();
+        // NOTA: se desactivó a propósito compartir la pantalla por WebRTC
+        // (ver explicación en handleTeamSnapshot). El invitado siempre ve la
+        // vista reconstruida a partir del `frame` sincronizado por Firestore.
+        // startHostScreenShare();
         return;
       }
 
