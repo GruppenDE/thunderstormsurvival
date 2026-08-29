@@ -3219,11 +3219,13 @@
     // ---------------------------------------------------------------------
     // 2) CONFIGURACIÓN
     // ---------------------------------------------------------------------
-    const SV_TICK_MS       = 150;  // envío de posición: ~6-7/s (antes 260ms/~3.8 por seg: se sentía a destiempo)
-    const SV_INTERP_MS     = 150;  // ventana de interpolación ≈ intervalo de envío, para no ir siempre "atrasado"
-    const SV_EXTRAPOLATE_MS = 350; // tras alcanzar el último dato real, sigue moviendo al compañero con su
-                                    // última velocidad conocida hasta este límite, en vez de congelarlo en seco
-                                    // mientras llega el próximo paquete (disimula la latencia de red)
+    const SV_TICK_MS       = 100;  // envío de posición: ~10/s (subido de nuevo; la cuota de Firestore
+                                    // ya no es el límite práctico si el juego no tiene miles de partidas/día)
+    const SV_INTERP_MS     = 100;  // ventana de interpolación ≈ intervalo de envío
+    const SV_EXTRAPOLATE_MS = 450; // margen extra moviendo al compañero con su última velocidad conocida
+                                    // mientras llega el próximo paquete real
+    const SV_LEAD_MS       = 90;   // "adelanto" aplicado al dato recibido: compensa el tiempo típico que
+                                    // tarda en viajar por la red, para no mostrar siempre una posición vieja
     const SV_HEARTBEAT_MS  = 8000;
     const SV_STALE_MS      = 20000; // sin heartbeat => compañero desconectado
     const SV_COUNTDOWN_MS  = 3500;
@@ -3503,8 +3505,17 @@
         //    resolución, porque la física del salto usa píxeles fijos en
         //    ambos dispositivos) → se resta de MI propio nivel de suelo.
         const groundY = cssH - groundOffset();
-        const targetX = (typeof partner.nx === 'number' ? partner.nx : 0.5) * cssW;
+        let targetX = (typeof partner.nx === 'number' ? partner.nx : 0.5) * cssW;
         const targetY = groundY - (partner.h || 0);
+        // Compensación de "adelanto": para cuando este dato nos llega, el
+        // compañero (en su propio dispositivo) ya avanzó un poco más — el
+        // tiempo típico de un viaje de red. Si venía corriendo, proyectamos
+        // su posición ese tanto hacia adelante en vez de mostrar la que ya
+        // quedó vieja. Esto es lo que más se nota como "ya no va con lag".
+        if (partner.action === 'run') {
+          const pxPerMs = player.speed / 16.7;
+          targetX = Math.max(0, Math.min(cssW, targetX + pxPerMs * (partner.facing || 1) * SV_LEAD_MS));
+        }
         if (targetX !== c.nextX || targetY !== c.nextY) {
           c.prevX = c.curX; c.prevY = c.curY;
           c.nextX = targetX; c.nextY = targetY;
