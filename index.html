@@ -2530,7 +2530,7 @@
       // Obstáculos (orbes eléctricos que caen)
       if (f.obs) {
         f.obs.forEach(o => {
-          const ox = o[0] * sx, oy = o[1] * sy, r = Math.max(2.5, o[2] * ((sx + sy) / 2));
+          const ox = o.x * sx, oy = o.y * sy, r = Math.max(2.5, o.r * ((sx + sy) / 2));
           const glow = ctx.createRadialGradient(ox, oy, 0, ox, oy, r * 2.2);
           glow.addColorStop(0, 'rgba(147,197,253,0.9)');
           glow.addColorStop(1, 'rgba(147,197,253,0)');
@@ -2544,7 +2544,7 @@
       // OVNIs
       if (f.ufos) {
         f.ufos.forEach(u => {
-          const ux = u[0] * sx, uy = u[1] * sy;
+          const ux = u.x * sx, uy = u.y * sy;
           ctx.fillStyle = '#111827';
           ctx.strokeStyle = '#93c5fd';
           ctx.lineWidth = 1.5;
@@ -3282,16 +3282,23 @@
         w: round(cssW), h: round(cssH), gy: round(groundOffset()),
         p1: [round(player.x), round(player.y)],
         p2: teamMode ? [round(player2.x), round(player2.y)] : null,
-        obs: obstacles.slice(0, 20).map(o => [round(o.x), round(o.y), round(o.radius)]),
-        ufos: ufos.slice(0, 6).map(u => [round(u.x), round(u.y)])
+        obs: obstacles.slice(0, 20).map(o => ({ x: round(o.x), y: round(o.y), r: round(o.radius) })),
+        ufos: ufos.slice(0, 6).map(u => ({ x: round(u.x), y: round(u.y) }))
       };
       window.firebaseReady.then(fb => {
-        fb.updateDoc(fb.doc(fb.db, 'rooms', multiplayer.code), { frame }).catch((err) => {
-          // Si esto falla repetidamente con code 'permission-denied', las reglas de
-          // seguridad de Firestore están rechazando el campo "frame" (revisa la
-          // consola de Firebase: Firestore Database > Reglas).
-          console.error('[frame sync] Error enviando el frame al invitado:', err);
-        });
+        try {
+          fb.updateDoc(fb.doc(fb.db, 'rooms', multiplayer.code), { frame }).catch((err) => {
+            // Si esto falla repetidamente con code 'permission-denied', las reglas de
+            // seguridad de Firestore están rechazando el campo "frame" (revisa la
+            // consola de Firebase: Firestore Database > Reglas).
+            console.error('[frame sync] Error enviando el frame al invitado:', err);
+          });
+        } catch (err) {
+          // updateDoc puede lanzar de forma síncrona (por ejemplo, datos con un
+          // formato que Firestore no admite) en vez de devolver una promesa
+          // rechazada; lo atrapamos aquí para que nunca quede en silencio.
+          console.error('[frame sync] Error de formato al construir el frame:', err);
+        }
       });
     }
 
